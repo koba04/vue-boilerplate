@@ -1,0 +1,21 @@
+{
+  "name": "my-vuejs-boilerplate",
+  "version": "0.0.1",
+  "description": "vue.js sample project",
+  "main": "src/main.js",
+  "dependencies": {
+    "vue": "~0.9.2",
+    "jquery": "~2.1.0"
+  },
+  "devDependencies": {
+    "partialify": "~3.0.0",
+    "insert-css": "~0.1.1",
+    "beefy": "~1.1.0",
+    "coffeeify": "~0.6.0"
+  },
+  "author": "koba04",
+  "license": "MIT",
+  "scripts": {
+    "dev": "beefy src/main.js:bundle.js --live -- -t partialify -t coffeeify"
+  }
+}
