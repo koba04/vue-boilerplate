@@ -1,14 +1,13 @@
 require('insert-css')(require('./app.css'))
 
-$ = require 'jquery'
 Vue = require 'vue'
+$   = require 'jquery'
 
-new Vue
-  el: '#app'
+module.exports = Vue.extend
   template: require './app.html'
   components:
-      "input-artist": require './components/input-artist/index.coffee'
-      "tracks":       require './components/tracks/index.coffee'
+    "input-artist": require './components/input-artist/index.coffee'
+    "tracks":       require './components/tracks/index.coffee'
   data:
     artist: "radiohead"
     tracks: []
