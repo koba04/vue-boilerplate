@@ -5,7 +5,7 @@
   "main": "src/app.coffee",
   "dependencies": {
     "vue": "~0.9.2",
-    "jquery": "~2.1.0"
+    "superagent": "~0.17.0"
   },
   "devDependencies": {
     "partialify": "~3.0.0",
@@ -16,6 +16,6 @@
   "author": "koba04",
   "license": "MIT",
   "scripts": {
-    "dev": "beefy src/app.coffee:bundle.js --live -- -t partialify -t coffeeify --extension=coffee"
+    "dev": "beefy src/main.coffee:bundle.js --live -- -t partialify -t coffeeify --extension=coffee"
   }
 }
