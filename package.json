@@ -11,7 +11,8 @@
     "partialify": "~3.0.0",
     "insert-css": "~0.1.1",
     "beefy": "~1.1.0",
-    "coffeeify": "~0.6.0"
+    "coffeeify": "~0.6.0",
+    "browserify": "~3.39.0"
   },
   "author": "koba04",
   "license": "MIT",
