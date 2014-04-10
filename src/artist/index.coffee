@@ -1,13 +1,13 @@
-require('insert-css')(require('./app.css'))
+require('insert-css')(require('./style.css'))
 
 Vue     = require 'vue'
 request = require 'superagent'
 
 module.exports = Vue.extend
-  template: require './app.html'
+  template: require './template.html'
   components:
     "input-artist": require './components/input-artist/index.coffee'
-    "tracks":       require './components/tracks/index.coffee'
+    "tracks":       require '../tracks/index.coffee'
   data:
     artist: "radiohead"
     tracks: []
