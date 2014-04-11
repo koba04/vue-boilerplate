@@ -20,6 +20,7 @@
   "author": "koba04",
   "license": "MIT",
   "scripts": {
-    "dev": "beefy src/main.coffee:bundle.js --live -- -t partialify -t coffeeify -t stylify --extension=coffee"
+    "dev": "beefy src/main.coffee:bundle.js --live -- -t partialify -t coffeeify -t stylify --extension=coffee",
+    "build": "browserify src/main.coffee -t partialify -t coffeeify -t stylify --extension=coffee > bundle.js"
   }
 }
