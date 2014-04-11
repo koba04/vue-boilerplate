@@ -4,7 +4,10 @@
 * coffeescript
 * browserify
   * beefy (auto build & livereload)
-  * partialify & insert-css
+  * partialify
+  * coffeeify
+  * stylify
+* insert-css
 
 ## setup
 ```
