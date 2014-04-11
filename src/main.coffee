@@ -1,5 +1,5 @@
 Vue   = require 'vue'
-page  = require 'page'
+director = require 'director'
 
 # register component
 Vue.component 'top',      require './top/index.coffee'
@@ -15,8 +15,9 @@ app = new Vue
     view: "top"
 
 # routing
-page '/artist.html',   -> app.view = 'artist'
-page '/country.html',  -> app.view = 'country'
-page '*',         -> app.view = 'top'
-page()
+router = new director.Router
+router.on 'artist',  -> app.view = 'artist'
+router.on 'country', -> app.view = 'country'
+router.on '',        -> app.view = 'top'
+router.init()
 
