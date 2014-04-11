@@ -1,11 +1,13 @@
-require('insert-css')(require('./style.css'))
+require('insert-css')(require('./index.styl'))
 
 Vue     = require 'vue'
 request = require 'superagent'
 
 module.exports = Vue.extend
-  template: require './template.html'
+  template: require './index.html'
+  className: "country"
   components:
+    "nav":            require '../nav/index.coffee'
     "select-country": require './components/select-country/index.coffee'
     "tracks":         require '../tracks/index.coffee'
   data:

@@ -1,7 +1,8 @@
-require('insert-css')(require('./style.css'))
+require('insert-css')(require('./index.styl'))
 
 module.exports =
-  template: require './template.html'
+  template: require './index.html'
+  className: "select-country"
   methods:
     fetch: (e) ->
       e.preventDefault()

@@ -1,6 +1,7 @@
-require('insert-css')(require('./style.css'))
+require('insert-css')(require('./index.styl'))
 
 Vue = require 'vue'
 module.exports = Vue.extend
-  template: require './template.html'
+  template: require './index.html'
+  className: 'top'
 
