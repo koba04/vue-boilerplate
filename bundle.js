@@ -6313,8 +6313,8 @@ module.exports = Vue.extend({
 });
 
 
-},{"../nav/index.coffee":44,"../tracks/index.coffee":51,"./components/input-artist/index.coffee":31,"./index.html":35,"./index.styl":36,"insert-css":2,"superagent":3,"vue":25}],35:[function(require,module,exports){
-module.exports = '<link href=\'http://fonts.googleapis.com/css?family=Poiret+One&subset=latin,cyrillic\' rel=\'stylesheet\' type=\'text/css\'>\n<header class="page-header">\n  <h1>Artist Top Tracks <small>by Last.FM</small></h1>\n</header>\n<div v-component="nav"></div>\n<article class="main-content">\n  <div v-component="input-artist"></div>\n  <div v-component="tracks"></div>\n</article>\n{{> footer}}\n';
+},{"../nav/index.coffee":46,"../tracks/index.coffee":53,"./components/input-artist/index.coffee":31,"./index.html":35,"./index.styl":36,"insert-css":2,"superagent":3,"vue":25}],35:[function(require,module,exports){
+module.exports = '<link href=\'http://fonts.googleapis.com/css?family=Poiret+One&subset=latin,cyrillic\' rel=\'stylesheet\' type=\'text/css\'>\n<header class="page-header">\n  <h1>Artist Top Tracks <small>by Last.FM</small></h1>\n</header>\n<div v-component="nav"></div>\n<article class="main-content">\n  <div v-component="input-artist"></div>\n  <div v-component="tracks"></div>\n</article>\n<div v-partial="footer"></div>\n';
 },{}],36:[function(require,module,exports){
 module.exports = ".artist h1{font-family:'Poiret One',cursive}";
 },{}],37:[function(require,module,exports){
@@ -6370,8 +6370,8 @@ module.exports = Vue.extend({
 });
 
 
-},{"../nav/index.coffee":44,"../tracks/index.coffee":51,"./components/select-country/index.coffee":37,"./index.html":41,"./index.styl":42,"insert-css":2,"superagent":3,"vue":25}],41:[function(require,module,exports){
-module.exports = '<link href=\'http://fonts.googleapis.com/css?family=Roboto+Condensed&subset=latin,cyrillic\' rel=\'stylesheet\' type=\'text/css\'>\n<header class="page-header">\n  <h1>Country Top Tracks <small>by Last.FM</small></h1>\n</header>\n<div v-component="nav"></div>\n<article class="main-content">\n  <div v-component="select-country"></div>\n  <div v-component="tracks"></div>\n</article>\n{{> footer}}\n';
+},{"../nav/index.coffee":46,"../tracks/index.coffee":53,"./components/select-country/index.coffee":37,"./index.html":41,"./index.styl":42,"insert-css":2,"superagent":3,"vue":25}],41:[function(require,module,exports){
+module.exports = '<link href=\'http://fonts.googleapis.com/css?family=Roboto+Condensed&subset=latin,cyrillic\' rel=\'stylesheet\' type=\'text/css\'>\n<header class="page-header">\n  <h1>Country Top Tracks <small>by Last.FM</small></h1>\n</header>\n<div v-component="nav"></div>\n<article class="main-content">\n  <div v-component="select-country"></div>\n  <div v-component="tracks"></div>\n</article>\n<div v-partial="footer"></div>\n';
 },{}],42:[function(require,module,exports){
 module.exports = ".country h1{font-family:'Roboto Condensed',sans-serif}";
 },{}],43:[function(require,module,exports){
@@ -6389,8 +6389,12 @@ Vue.component('country', require('./country/index.coffee'));
 
 Vue.partial('footer', require('./partials/footer.html'));
 
+require('insert-css')(require('./index.styl'));
+
 app = new Vue({
   el: '#app',
+  className: "container",
+  template: require('./index.html'),
   data: {
     view: "top"
   }
@@ -6413,7 +6417,11 @@ router.on('', function() {
 router.init();
 
 
-},{"./artist/index.coffee":34,"./country/index.coffee":40,"./partials/footer.html":47,"./top/index.coffee":48,"director":1,"vue":25}],44:[function(require,module,exports){
+},{"./artist/index.coffee":34,"./country/index.coffee":40,"./index.html":44,"./index.styl":45,"./partials/footer.html":49,"./top/index.coffee":50,"director":1,"insert-css":2,"vue":25}],44:[function(require,module,exports){
+module.exports = '<div v-view="view" v-animation></div>\n';
+},{}],45:[function(require,module,exports){
+module.exports = "#app .v-enter{-webkit-animation:fadein .5s;-webkit-animation-delay:.2s;animation:fadein .5s;animation-delay:.2s;opacity:0}#app .v-leave{-webkit-animation:fadeout .2s;animation:fadeout .2s}@-moz-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-webkit-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-o-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-ms-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-moz-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@-webkit-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@-o-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@-ms-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}";
+},{}],46:[function(require,module,exports){
 require('insert-css')(require('./index.styl'));
 
 module.exports = {
@@ -6422,13 +6430,13 @@ module.exports = {
 };
 
 
-},{"./index.html":45,"./index.styl":46,"insert-css":2}],45:[function(require,module,exports){
+},{"./index.html":47,"./index.styl":48,"insert-css":2}],47:[function(require,module,exports){
 module.exports = '<ul class="nav nav-pills nav-justified">\n  <li v-class="active: $parent.artist"><a href="#artist">Atrist</a></li>\n  <li v-class="active: $parent.selectCountry"><a href="#country">Country</a></li>\n</ul>\n';
-},{}],46:[function(require,module,exports){
-module.exports = ".nav-content .nav{margin-bottom:20px;border-bottom:solid #eee}";
-},{}],47:[function(require,module,exports){
-module.exports = '<footer>\n  <div class="well well-lg">\n    <a href="#">TOP</a>&nbsp;|&nbsp;\n    <a href="https://github.com/koba04/vue-boilerplate">github</a>\n  </div>\n</footer>\n';
 },{}],48:[function(require,module,exports){
+module.exports = ".nav-content .nav{margin-bottom:20px;border-bottom:solid #eee}";
+},{}],49:[function(require,module,exports){
+module.exports = '<footer>\n  <div class="well well-lg">\n    <a href="#">TOP</a>&nbsp;|&nbsp;\n    <a href="https://github.com/koba04/vue-boilerplate">github</a>\n  </div>\n</footer>\n';
+},{}],50:[function(require,module,exports){
 var Vue;
 
 require('insert-css')(require('./index.styl'));
@@ -6444,11 +6452,11 @@ module.exports = Vue.extend({
 });
 
 
-},{"../nav/index.coffee":44,"./index.html":49,"./index.styl":50,"insert-css":2,"vue":25}],49:[function(require,module,exports){
-module.exports = '<link href=\'http://fonts.googleapis.com/css?family=Playfair+Display+SC&subset=latin,cyrillic\' rel=\'stylesheet\' type=\'text/css\'>\n<header class="page-header">\n  <h1>TopPage</h1>\n</header>\n<div v-component="nav"></div>\n<article>\n  <p>Please select artist or country</p>\n</article>\n{{> footer}}\n';
-},{}],50:[function(require,module,exports){
+},{"../nav/index.coffee":46,"./index.html":51,"./index.styl":52,"insert-css":2,"vue":25}],51:[function(require,module,exports){
+module.exports = '<link href=\'http://fonts.googleapis.com/css?family=Playfair+Display+SC&subset=latin,cyrillic\' rel=\'stylesheet\' type=\'text/css\'>\n<header class="page-header">\n  <h1>TopPage</h1>\n</header>\n<div v-component="nav"></div>\n<article>\n  <p>Please select artist or country</p>\n</article>\n<div v-partial="footer"></div>\n';
+},{}],52:[function(require,module,exports){
 module.exports = ".top h1{font-family:'Playfair Display SC',serif}";
-},{}],51:[function(require,module,exports){
+},{}],53:[function(require,module,exports){
 require('insert-css')(require('./index.styl'));
 
 module.exports = {
@@ -6457,8 +6465,8 @@ module.exports = {
 };
 
 
-},{"./index.html":52,"./index.styl":53,"insert-css":2}],52:[function(require,module,exports){
+},{"./index.html":54,"./index.styl":55,"insert-css":2}],54:[function(require,module,exports){
 module.exports = '<ul class="list-group">\n  <li class="list-group-item" v-repeat="tracks">\n    <span class="label label-info">{{$index+1}}</span>\n    <a href="{{url}}" target="_blank"><span class="track">{{name}}</span></a>\n    <span class="artist">{{artist.name}}</span>\n    <small class="listeners glyphicon glyphicon-headphones">{{listeners}}</small>\n  </li>\n</ul>\n';
-},{}],53:[function(require,module,exports){
+},{}],55:[function(require,module,exports){
 module.exports = ".tracks .track{font-size:20px;margin-right:10px}.tracks .artist{font-size:14px;margin-right:10px}";
 },{}]},{},[43])

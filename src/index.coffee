@@ -9,8 +9,11 @@ Vue.component 'country',  require './country/index.coffee'
 Vue.partial 'footer', require './partials/footer.html'
 
 # create App
+require('insert-css')(require('./index.styl'))
 app = new Vue
   el: '#app'
+  className: "container"
+  template: require './index.html'
   data:
     view: "top"
 
