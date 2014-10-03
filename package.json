@@ -10,24 +10,24 @@
     "director": "~1.2.3"
   },
   "devDependencies": {
-    "browserify": "~3.41.0",
-    "partialify": "~3.0.0",
-    "insert-css": "~0.1.1",
     "beefy": "~1.1.0",
-    "coffeeify": "~0.6.0",
-    "stylify": "~0.1.3"
+    "browserify": "~3.41.0",
+    "coffee-script": "https://registry.npmjs.org/coffee-script/-/coffee-script-1.8.0.tgz",
+    "insert-css": "^0.2.0",
+    "stylus": "^0.49.1",
+    "vueify": "^0.1.0"
   },
   "author": "koba04",
   "license": "MIT",
   "scripts": {
-    "dev": "beefy src/index.coffee:bundle.js --live -- --extension=coffee",
-    "build": "browserify src/index.coffee --extension=coffee > bundle.js"
+    "dev": "beefy src/index.js:bundle.js --live",
+    "build": "browserify src/index.js > bundle.js"
   },
   "browserify": {
     "transform": [
-      ["partialify"],
-      ["coffeeify"],
-      ["stylify"]
+      [
+        "vueify"
+      ]
     ]
   }
 }

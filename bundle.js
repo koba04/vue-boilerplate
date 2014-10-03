@@ -721,7 +721,7 @@ Router.prototype.mount = function(routes, path) {
 },{}],2:[function(require,module,exports){
 var inserted = {};
 
-module.exports = function (css) {
+module.exports = function (css, options) {
     if (inserted[css]) return;
     inserted[css] = true;
     
@@ -735,7 +735,11 @@ module.exports = function (css) {
     }
     
     var head = document.getElementsByTagName('head')[0];
-    head.appendChild(elem);
+    if (options && options.prepend) {
+        head.insertBefore(elem, head.childNodes[0]);
+    } else {
+        head.appendChild(elem);
+    }
 };
 
 },{}],3:[function(require,module,exports){
@@ -1973,7 +1977,7 @@ BatcherProto.reset = function () {
 }
 
 module.exports = Batcher
-},{"./utils":29}],7:[function(require,module,exports){
+},{"./utils":31}],7:[function(require,module,exports){
 var Batcher        = require('./batcher'),
     bindingBatcher = new Batcher(),
     bindingId      = 1
@@ -2028,7 +2032,7 @@ BindingProto._update = function () {
     var i = this.dirs.length,
         value = this.val()
     while (i--) {
-        this.dirs[i].update(value)
+        this.dirs[i].$update(value)
     }
     this.pub()
 }
@@ -2065,7 +2069,7 @@ BindingProto.unbind = function () {
     this.unbound = true
     var i = this.dirs.length
     while (i--) {
-        this.dirs[i].unbind()
+        this.dirs[i].$unbind()
     }
     i = this.deps.length
     var subs
@@ -2148,20 +2152,6 @@ function Compiler (vm, options) {
     compiler.children = []
     compiler.emitter  = new Emitter(vm)
 
-    // create bindings for computed properties
-    if (options.methods) {
-        for (key in options.methods) {
-            compiler.createBinding(key)
-        }
-    }
-
-    // create bindings for methods
-    if (options.computed) {
-        for (key in options.computed) {
-            compiler.createBinding(key)
-        }
-    }
-
     // VM ---------------------------------------------------------------------
 
     // set VM properties
@@ -2177,6 +2167,10 @@ function Compiler (vm, options) {
         compiler.parent = parentVM.$compiler
         parentVM.$compiler.children.push(compiler)
         vm.$parent = parentVM
+        // inherit lazy option
+        if (!('lazy' in options)) {
+            options.lazy = compiler.parent.options.lazy
+        }
     }
     vm.$root = getRoot(compiler).vm
 
@@ -2185,6 +2179,20 @@ function Compiler (vm, options) {
     // setup observer
     // this is necesarry for all hooks and data observation events
     compiler.setupObserver()
+
+    // create bindings for computed properties
+    if (options.methods) {
+        for (key in options.methods) {
+            compiler.createBinding(key)
+        }
+    }
+
+    // create bindings for methods
+    if (options.computed) {
+        for (key in options.computed) {
+            compiler.createBinding(key)
+        }
+    }
 
     // initialize data
     var data = compiler.data = options.data || {},
@@ -2302,8 +2310,8 @@ CompilerProto.setupElement = function (options) {
         }
         // replace option: use the first node in
         // the template directly
-        if (options.replace && template.childNodes.length === 1) {
-            replacer = template.childNodes[0].cloneNode(true)
+        if (options.replace && template.firstChild === template.lastChild) {
+            replacer = template.firstChild.cloneNode(true)
             if (el.parentNode) {
                 el.parentNode.insertBefore(replacer, el)
                 el.parentNode.removeChild(el)
@@ -2603,37 +2611,48 @@ CompilerProto.compileElement = function (node, root) {
         node.vue_effect = this.eval(utils.attr(node, 'effect'))
 
         var prefix = config.prefix + '-',
-            attrs = slice.call(node.attributes),
             params = this.options.paramAttributes,
-            attr, isDirective, exp, directives, directive, dirname
+            attr, attrname, isDirective, exp, directives, directive, dirname
 
+        // v-with has special priority among the rest
+        // it needs to pull in the value from the parent before
+        // computed properties are evaluated, because at this stage
+        // the computed properties have not set up their dependencies yet.
+        if (root) {
+            var withExp = utils.attr(node, 'with')
+            if (withExp) {
+                directives = this.parseDirective('with', withExp, node, true)
+                for (j = 0, k = directives.length; j < k; j++) {
+                    this.bindDirective(directives[j], this.parent)
+                }
+            }
+        }
+
+        var attrs = slice.call(node.attributes)
         for (i = 0, l = attrs.length; i < l; i++) {
 
             attr = attrs[i]
+            attrname = attr.name
             isDirective = false
 
-            if (attr.name.indexOf(prefix) === 0) {
+            if (attrname.indexOf(prefix) === 0) {
                 // a directive - split, parse and bind it.
                 isDirective = true
-                dirname = attr.name.slice(prefix.length)
+                dirname = attrname.slice(prefix.length)
                 // build with multiple: true
                 directives = this.parseDirective(dirname, attr.value, node, true)
                 // loop through clauses (separated by ",")
                 // inside each attribute
                 for (j = 0, k = directives.length; j < k; j++) {
-                    directive = directives[j]
-                    if (dirname === 'with') {
-                        this.bindDirective(directive, this.parent)
-                    } else {
-                        this.bindDirective(directive)
-                    }
+                    this.bindDirective(directives[j])
                 }
             } else if (config.interpolate) {
                 // non directive attribute, check interpolation tags
                 exp = TextParser.parseAttr(attr.value)
                 if (exp) {
-                    directive = this.parseDirective('attr', attr.name + ':' + exp, node)
-                    if (params && params.indexOf(attr.name) > -1) {
+                    directive = this.parseDirective('attr', exp, node)
+                    directive.arg = attrname
+                    if (params && params.indexOf(attrname) > -1) {
                         // a param attribute... we should use the parent binding
                         // to avoid circular updates like size={{size}}
                         this.bindDirective(directive, this.parent)
@@ -2644,7 +2663,7 @@ CompilerProto.compileElement = function (node, root) {
             }
 
             if (isDirective && dirname !== 'cloak') {
-                node.removeAttribute(attr.name)
+                node.removeAttribute(attrname)
             }
         }
 
@@ -2761,7 +2780,7 @@ CompilerProto.bindDirective = function (directive, bindingOwner) {
         directive.bind(value)
     }
     // set initial value
-    directive.update(value, true)
+    directive.$update(value, true)
 }
 
 /**
@@ -2784,7 +2803,7 @@ CompilerProto.createBinding = function (key, directive) {
         compiler.defineExp(key, binding, directive)
     } else if (isFn) {
         bindings[key] = binding
-        binding.value = compiler.vm[key] = methods[key]
+        compiler.defineVmProp(key, binding, methods[key])
     } else {
         bindings[key] = binding
         if (binding.root) {
@@ -2794,9 +2813,12 @@ CompilerProto.createBinding = function (key, directive) {
                 compiler.defineComputed(key, binding, computed[key])
             } else if (key.charAt(0) !== '$') {
                 // normal property
-                compiler.defineProp(key, binding)
+                compiler.defineDataProp(key, binding)
             } else {
-                compiler.defineMeta(key, binding)
+                // properties that start with $ are meta properties
+                // they should be kept on the vm but not in the data object.
+                compiler.defineVmProp(key, binding, compiler.data[key])
+                delete compiler.data[key]
             }
         } else if (computed && computed[utils.baseKey(key)]) {
             // nested path on computed property
@@ -2818,10 +2840,10 @@ CompilerProto.createBinding = function (key, directive) {
 }
 
 /**
- *  Define the getter/setter for a root-level property on the VM
- *  and observe the initial value
+ *  Define the getter/setter to proxy a root-level
+ *  data property on the VM
  */
-CompilerProto.defineProp = function (key, binding) {
+CompilerProto.defineDataProp = function (key, binding) {
     var compiler = this,
         data     = compiler.data,
         ob       = data.__emitter__
@@ -2851,14 +2873,13 @@ CompilerProto.defineProp = function (key, binding) {
 }
 
 /**
- *  Define a meta property, e.g. $index or $key,
- *  which is bindable but only accessible on the VM,
+ *  Define a vm property, e.g. $index, $key, or mixin methods
+ *  which are bindable but only accessible on the VM,
  *  not in the data.
  */
-CompilerProto.defineMeta = function (key, binding) {
+CompilerProto.defineVmProp = function (key, binding, value) {
     var ob = this.observer
-    binding.value = this.data[key]
-    delete this.data[key]
+    binding.value = value
     def(this.vm, key, {
         get: function () {
             if (Observer.shouldGet) ob.emit('get', key)
@@ -2999,7 +3020,7 @@ CompilerProto.resolveComponent = function (node, data, test) {
 /**
  *  Unbind and remove element
  */
-CompilerProto.destroy = function () {
+CompilerProto.destroy = function (noRemove) {
 
     // avoid being called more than once
     // this is irreversible!
@@ -3020,6 +3041,14 @@ CompilerProto.destroy = function () {
     // unobserve data
     Observer.unobserve(compiler.data, '', compiler.observer)
 
+    // destroy all children
+    // do not remove their elements since the parent
+    // may have transitions and the children may not
+    i = children.length
+    while (i--) {
+        children[i].destroy(true)
+    }
+
     // unbind all direcitves
     i = directives.length
     while (i--) {
@@ -3035,7 +3064,7 @@ CompilerProto.destroy = function () {
                 if (j > -1) dirs.splice(j, 1)
             }
         }
-        dir.unbind()
+        dir.$unbind()
     }
 
     // unbind all computed, anonymous bindings
@@ -3052,12 +3081,6 @@ CompilerProto.destroy = function () {
         }
     }
 
-    // destroy all children
-    i = children.length
-    while (i--) {
-        children[i].destroy()
-    }
-
     // remove self from parent
     if (parent) {
         j = parent.children.indexOf(compiler)
@@ -3065,10 +3088,12 @@ CompilerProto.destroy = function () {
     }
 
     // finally remove dom element
-    if (el === document.body) {
-        el.innerHTML = ''
-    } else {
-        vm.$remove()
+    if (!noRemove) {
+        if (el === document.body) {
+            el.innerHTML = ''
+        } else {
+            vm.$remove()
+        }
     }
     el.vue_vm = null
 
@@ -3094,7 +3119,7 @@ function getRoot (compiler) {
 }
 
 module.exports = Compiler
-},{"./binding":7,"./config":9,"./deps-parser":10,"./directive":11,"./emitter":22,"./exp-parser":23,"./observer":26,"./text-parser":27,"./utils":29,"./viewmodel":30}],9:[function(require,module,exports){
+},{"./binding":7,"./config":9,"./deps-parser":10,"./directive":11,"./emitter":22,"./exp-parser":23,"./observer":27,"./text-parser":29,"./utils":31,"./viewmodel":32}],9:[function(require,module,exports){
 var TextParser = require('./text-parser')
 
 module.exports = {
@@ -3114,7 +3139,7 @@ Object.defineProperty(module.exports, 'delimiters', {
         TextParser.setDelimiters(delimiters)
     }
 })
-},{"./text-parser":27}],10:[function(require,module,exports){
+},{"./text-parser":29}],10:[function(require,module,exports){
 var Emitter  = require('./emitter'),
     utils    = require('./utils'),
     Observer = require('./observer'),
@@ -3180,13 +3205,14 @@ module.exports = {
     }
     
 }
-},{"./emitter":22,"./observer":26,"./utils":29}],11:[function(require,module,exports){
+},{"./emitter":22,"./observer":27,"./utils":31}],11:[function(require,module,exports){
 var dirId           = 1,
     ARG_RE          = /^[\w\$-]+$/,
     FILTER_TOKEN_RE = /[^\s'"]+|'[^']+'|"[^"]+"/g,
     NESTING_RE      = /^\$(parent|root)\./,
     SINGLE_VAR_RE   = /^[\w\.$]+$/,
-    QUOTE_RE        = /"/g
+    QUOTE_RE        = /"/g,
+    TextParser      = require('./text-parser')
 
 /**
  *  Directive class
@@ -3208,14 +3234,10 @@ function Directive (name, ast, definition, compiler, el) {
 
     // mix in properties from the directive definition
     if (typeof definition === 'function') {
-        this[isEmpty ? 'bind' : '_update'] = definition
+        this[isEmpty ? 'bind' : 'update'] = definition
     } else {
         for (var prop in definition) {
-            if (prop === 'unbind' || prop === 'update') {
-                this['_' + prop] = definition[prop]
-            } else {
-                this[prop] = definition[prop]
-            }
+            this[prop] = definition[prop]
         }
     }
 
@@ -3225,11 +3247,12 @@ function Directive (name, ast, definition, compiler, el) {
         return
     }
 
-    this.expression = (
-        this.isLiteral
-            ? compiler.eval(this.expression)
-            : this.expression
-    ).trim()
+    if (TextParser.Regex.test(this.key)) {
+        this.key = compiler.eval(this.key)
+        if (this.isLiteral) {
+            this.expression = this.key
+        }
+    }
 
     var filters = ast.filters,
         filter, fn, i, l, computed
@@ -3271,13 +3294,14 @@ var DirProto = Directive.prototype
  *  for computed properties, this will only be called once
  *  during initialization.
  */
-DirProto.update = function (value, init) {
+DirProto.$update = function (value, init) {
+    if (this.$lock) return
     if (init || value !== this.value || (value && typeof value === 'object')) {
         this.value = value
-        if (this._update) {
-            this._update(
+        if (this.update) {
+            this.update(
                 this.filters && !this.computeFilters
-                    ? this.applyFilters(value)
+                    ? this.$applyFilters(value)
                     : value,
                 init
             )
@@ -3288,7 +3312,7 @@ DirProto.update = function (value, init) {
 /**
  *  pipe the value through filters
  */
-DirProto.applyFilters = function (value) {
+DirProto.$applyFilters = function (value) {
     var filtered = value, filter
     for (var i = 0, l = this.filters.length; i < l; i++) {
         filter = this.filters[i]
@@ -3300,10 +3324,10 @@ DirProto.applyFilters = function (value) {
 /**
  *  Unbind diretive
  */
-DirProto.unbind = function () {
+DirProto.$unbind = function () {
     // this can be called before the el is even assigned...
     if (!this.el || !this.vm) return
-    if (this._unbind) this._unbind()
+    if (this.unbind) this.unbind()
     this.vm = this.el = this.binding = this.compiler = null
 }
 
@@ -3346,7 +3370,7 @@ Directive.parse = function (str) {
             arg = str.slice(begin, i).trim()
             if (ARG_RE.test(arg)) {
                 argIndex = i + 1
-                dir.arg = str.slice(begin, i).trim()
+                dir.arg = arg
             }
         } else if (c === '|' && str.charAt(i + 1) !== '|' && str.charAt(i - 1) !== '|') {
             if (dir.key === undefined) {
@@ -3440,8 +3464,8 @@ function escapeQuote (v) {
 }
 
 module.exports = Directive
-},{}],12:[function(require,module,exports){
-var guard = require('../utils').guard,
+},{"./text-parser":29}],12:[function(require,module,exports){
+var utils = require('../utils'),
     slice = [].slice
 
 /**
@@ -3454,14 +3478,13 @@ module.exports = {
         // {{{ inline unescaped html }}}
         if (this.el.nodeType === 8) {
             // hold nodes
-            this.holder = document.createElement('div')
             this.nodes = []
         }
     },
 
     update: function (value) {
-        value = guard(value)
-        if (this.holder) {
+        value = utils.guard(value)
+        if (this.nodes) {
             this.swap(value)
         } else {
             this.el.innerHTML = value
@@ -3470,20 +3493,20 @@ module.exports = {
 
     swap: function (value) {
         var parent = this.el.parentNode,
-            holder = this.holder,
-            nodes = this.nodes,
-            i = nodes.length, l
+            nodes  = this.nodes,
+            i      = nodes.length
+        // remove old nodes
         while (i--) {
             parent.removeChild(nodes[i])
         }
-        holder.innerHTML = value
-        nodes = this.nodes = slice.call(holder.childNodes)
-        for (i = 0, l = nodes.length; i < l; i++) {
-            parent.insertBefore(nodes[i], this.el)
-        }
+        // convert new value to a fragment
+        var frag = utils.toFragment(value)
+        // save a reference to these nodes so we can remove later
+        this.nodes = slice.call(frag.childNodes)
+        parent.insertBefore(frag, this.el)
     }
 }
-},{"../utils":29}],13:[function(require,module,exports){
+},{"../utils":31}],13:[function(require,module,exports){
 var utils    = require('../utils')
 
 /**
@@ -3518,7 +3541,7 @@ module.exports = {
     update: function (value) {
 
         if (!value) {
-            this._unbind()
+            this.unbind()
         } else if (!this.childVM) {
             this.childVM = new this.Ctor({
                 el: this.el.cloneNode(true),
@@ -3540,7 +3563,7 @@ module.exports = {
         }
     }
 }
-},{"../utils":29}],14:[function(require,module,exports){
+},{"../utils":31}],14:[function(require,module,exports){
 var utils      = require('../utils'),
     config     = require('../config'),
     transition = require('../transition'),
@@ -3670,7 +3693,7 @@ directives.html    = require('./html')
 directives.style   = require('./style')
 directives.partial = require('./partial')
 directives.view    = require('./view')
-},{"../config":9,"../transition":28,"../utils":29,"./html":12,"./if":13,"./model":15,"./on":16,"./partial":17,"./repeat":18,"./style":19,"./view":20,"./with":21}],15:[function(require,module,exports){
+},{"../config":9,"../transition":30,"../utils":31,"./html":12,"./if":13,"./model":15,"./on":16,"./partial":17,"./repeat":18,"./style":19,"./view":20,"./with":21}],15:[function(require,module,exports){
 var utils = require('../utils'),
     isIE9 = navigator.userAgent.indexOf('MSIE 9.0') > 0,
     filter = [].filter
@@ -3845,7 +3868,7 @@ module.exports = {
         }
     }
 }
-},{"../utils":29}],16:[function(require,module,exports){
+},{"../utils":31}],16:[function(require,module,exports){
 var utils    = require('../utils')
 
 /**
@@ -3859,6 +3882,13 @@ module.exports = {
         this.context = this.binding.isExp
             ? this.vm
             : this.binding.compiler.vm
+        if (this.el.tagName === 'IFRAME' && this.arg !== 'load') {
+            var self = this
+            this.iframeBind = function () {
+                self.el.contentWindow.addEventListener(self.arg, self.handler)
+            }
+            this.el.addEventListener('load', this.iframeBind)
+        }
     },
 
     update: function (handler) {
@@ -3866,7 +3896,7 @@ module.exports = {
             utils.warn('Directive "v-on:' + this.expression + '" expects a method.')
             return
         }
-        this._unbind()
+        this.reset()
         var vm = this.vm,
             context = this.context
         this.handler = function (e) {
@@ -3876,14 +3906,28 @@ module.exports = {
             context.$event = null
             return res
         }
-        this.el.addEventListener(this.arg, this.handler)
+        if (this.iframeBind) {
+            this.iframeBind()
+        } else {
+            this.el.addEventListener(this.arg, this.handler)
+        }
+    },
+
+    reset: function () {
+        var el = this.iframeBind
+            ? this.el.contentWindow
+            : this.el
+        if (this.handler) {
+            el.removeEventListener(this.arg, this.handler)
+        }
     },
 
     unbind: function () {
-        this.el.removeEventListener(this.arg, this.handler)
+        this.reset()
+        this.el.removeEventListener('load', this.iframeBind)
     }
 }
-},{"../utils":29}],17:[function(require,module,exports){
+},{"../utils":31}],17:[function(require,module,exports){
 var utils = require('../utils')
 
 /**
@@ -3928,13 +3972,13 @@ module.exports = {
 
             // just set innerHTML...
             el.innerHTML = ''
-            el.appendChild(partial.cloneNode(true))
+            el.appendChild(partial)
 
         }
     }
 
 }
-},{"../utils":29}],18:[function(require,module,exports){
+},{"../utils":31}],18:[function(require,module,exports){
 var utils      = require('../utils'),
     config     = require('../config')
 
@@ -4149,16 +4193,6 @@ module.exports = {
             (raw || data).__emitter__[this.identifier] = true
         }
 
-        if (wrap) {
-            var self = this,
-                sync = function (val) {
-                    self.lock = true
-                    self.collection.$set(vm.$index, val)
-                    self.lock = false
-                }
-            vm.$compiler.observer.on('change:' + alias, sync)
-        }
-
         return vm
 
     },
@@ -4191,13 +4225,8 @@ function indexOf (vms, obj) {
     }
     return -1
 }
-},{"../config":9,"../utils":29}],19:[function(require,module,exports){
-var camelRE = /-([a-z])/g,
-    prefixes = ['webkit', 'moz', 'ms']
-
-function camelReplacer (m) {
-    return m[1].toUpperCase()
-}
+},{"../config":9,"../utils":31}],19:[function(require,module,exports){
+var prefixes = ['-webkit-', '-moz-', '-ms-']
 
 /**
  *  Binding for CSS styles
@@ -4207,27 +4236,34 @@ module.exports = {
     bind: function () {
         var prop = this.arg
         if (!prop) return
-        var first = prop.charAt(0)
-        if (first === '$') {
+        if (prop.charAt(0) === '$') {
             // properties that start with $ will be auto-prefixed
             prop = prop.slice(1)
             this.prefixed = true
-        } else if (first === '-') {
-            // normal starting hyphens should not be converted
-            prop = prop.slice(1)
         }
-        this.prop = prop.replace(camelRE, camelReplacer)
+        this.prop = prop
     },
 
     update: function (value) {
-        var prop = this.prop
+        var prop = this.prop,
+            isImportant
+        /* jshint eqeqeq: true */
+        // cast possible numbers/booleans into strings
+        if (value != null) value += ''
         if (prop) {
-            this.el.style[prop] = value
+            if (value) {
+                isImportant = value.slice(-10) === '!important'
+                    ? 'important'
+                    : ''
+                if (isImportant) {
+                    value = value.slice(0, -10).trim()
+                }
+            }
+            this.el.style.setProperty(prop, value, isImportant)
             if (this.prefixed) {
-                prop = prop.charAt(0).toUpperCase() + prop.slice(1)
                 var i = prefixes.length
                 while (i--) {
-                    this.el.style[prefixes[i] + prop] = value
+                    this.el.style.setProperty(prefixes[i] + prop, value, isImportant)
                 }
             }
         } else {
@@ -4264,7 +4300,7 @@ module.exports = {
 
     update: function(value) {
 
-        this._unbind()
+        this.unbind()
 
         var Ctor  = this.compiler.getOption('components', value)
         if (!Ctor) return
@@ -4337,28 +4373,30 @@ module.exports = {
         if (!this.alone && !this.lock) {
             if (this.arg) {
                 this.vm.$set(this.arg, value)
-            } else {
+            } else if (this.vm.$data !== value) {
                 this.vm.$data = value
             }
         }
     }
 
 }
-},{"../utils":29}],22:[function(require,module,exports){
+},{"../utils":31}],22:[function(require,module,exports){
+var slice = [].slice
+
 function Emitter (ctx) {
     this._ctx = ctx || this
 }
 
 var EmitterProto = Emitter.prototype
 
-EmitterProto.on = function(event, fn){
+EmitterProto.on = function (event, fn) {
     this._cbs = this._cbs || {}
     ;(this._cbs[event] = this._cbs[event] || [])
         .push(fn)
     return this
 }
 
-EmitterProto.once = function(event, fn){
+EmitterProto.once = function (event, fn) {
     var self = this
     this._cbs = this._cbs || {}
 
@@ -4372,7 +4410,7 @@ EmitterProto.once = function(event, fn){
     return this
 }
 
-EmitterProto.off = function(event, fn){
+EmitterProto.off = function (event, fn) {
     this._cbs = this._cbs || {}
 
     // all
@@ -4403,7 +4441,11 @@ EmitterProto.off = function(event, fn){
     return this
 }
 
-EmitterProto.emit = function(event, a, b, c){
+/**
+ *  The internal, faster emit with fixed amount of arguments
+ *  using Function.call
+ */
+EmitterProto.emit = function (event, a, b, c) {
     this._cbs = this._cbs || {}
     var callbacks = this._cbs[event]
 
@@ -4411,6 +4453,24 @@ EmitterProto.emit = function(event, a, b, c){
         callbacks = callbacks.slice(0)
         for (var i = 0, len = callbacks.length; i < len; i++) {
             callbacks[i].call(this._ctx, a, b, c)
+        }
+    }
+
+    return this
+}
+
+/**
+ *  The external emit using Function.apply
+ */
+EmitterProto.applyEmit = function (event) {
+    this._cbs = this._cbs || {}
+    var callbacks = this._cbs[event], args
+
+    if (callbacks) {
+        callbacks = callbacks.slice(0)
+        args = slice.call(arguments, 1)
+        for (var i = 0, len = callbacks.length; i < len; i++) {
+            callbacks[i].apply(this._ctx, args)
         }
     }
 
@@ -4444,7 +4504,7 @@ var KEYWORDS =
         ',Math',
         
     KEYWORDS_RE = new RegExp(["\\b" + KEYWORDS.replace(/,/g, '\\b|\\b') + "\\b"].join('|'), 'g'),
-    REMOVE_RE   = /\/\*(?:.|\n)*?\*\/|\/\/[^\n]*\n|\/\/[^\n]*$|'[^']*'|"[^"]*"|[\s\t\n]*\.[\s\t\n]*[$\w\.]+/g,
+    REMOVE_RE   = /\/\*(?:.|\n)*?\*\/|\/\/[^\n]*\n|\/\/[^\n]*$|'[^']*'|"[^"]*"|[\s\t\n]*\.[\s\t\n]*[$\w\.]+|[\{,]\s*[\w\$_]+\s*:/g,
     SPLIT_RE    = /[^\w$]+/g,
     NUMBER_RE   = /\b\d[^,]*/g,
     BOUNDARY_RE = /^,+|,+$/g
@@ -4609,7 +4669,7 @@ exports.eval = function (exp, compiler, data) {
     }
     return res
 }
-},{"./utils":29}],24:[function(require,module,exports){
+},{"./utils":31}],24:[function(require,module,exports){
 var utils    = require('./utils'),
     get      = utils.get,
     slice    = [].slice,
@@ -4647,6 +4707,7 @@ filters.lowercase = function (value) {
  *  12345 => $12,345.00
  */
 filters.currency = function (value, sign) {
+    value = parseFloat(value)
     if (!value && value !== 0) return ''
     sign = sign || '$'
     var s = Math.floor(value).toString(),
@@ -4800,17 +4861,87 @@ function stripQuotes (str) {
         return str.slice(1, -1)
     }
 }
-},{"./utils":29}],25:[function(require,module,exports){
+},{"./utils":31}],25:[function(require,module,exports){
+// string -> DOM conversion
+// wrappers originally from jQuery, scooped from component/domify
+var map = {
+    legend   : [1, '<fieldset>', '</fieldset>'],
+    tr       : [2, '<table><tbody>', '</tbody></table>'],
+    col      : [2, '<table><tbody></tbody><colgroup>', '</colgroup></table>'],
+    _default : [0, '', '']
+}
+
+map.td =
+map.th = [3, '<table><tbody><tr>', '</tr></tbody></table>']
+
+map.option =
+map.optgroup = [1, '<select multiple="multiple">', '</select>']
+
+map.thead =
+map.tbody =
+map.colgroup =
+map.caption =
+map.tfoot = [1, '<table>', '</table>']
+
+map.text =
+map.circle =
+map.ellipse =
+map.line =
+map.path =
+map.polygon =
+map.polyline =
+map.rect = [1, '<svg xmlns="http://www.w3.org/2000/svg" version="1.1">','</svg>']
+
+var TAG_RE = /<([\w:]+)/
+
+module.exports = function (templateString) {
+    var frag = document.createDocumentFragment(),
+        m = TAG_RE.exec(templateString)
+    // text only
+    if (!m) {
+        frag.appendChild(document.createTextNode(templateString))
+        return frag
+    }
+
+    var tag = m[1],
+        wrap = map[tag] || map._default,
+        depth = wrap[0],
+        prefix = wrap[1],
+        suffix = wrap[2],
+        node = document.createElement('div')
+
+    node.innerHTML = prefix + templateString.trim() + suffix
+    while (depth--) node = node.lastChild
+
+    // one element
+    if (node.firstChild === node.lastChild) {
+        frag.appendChild(node.firstChild)
+        return frag
+    }
+
+    // multiple nodes, return a fragment
+    var child
+    /* jshint boss: true */
+    while (child = node.firstChild) {
+        if (node.nodeType === 1) {
+            frag.appendChild(child)
+        }
+    }
+    return frag
+}
+},{}],26:[function(require,module,exports){
 var config      = require('./config'),
     ViewModel   = require('./viewmodel'),
     utils       = require('./utils'),
     makeHash    = utils.hash,
-    assetTypes  = ['directive', 'filter', 'partial', 'effect', 'component']
-
-// require these so Browserify can catch them
-// so they can be used in Vue.require
-require('./observer')
-require('./transition')
+    assetTypes  = ['directive', 'filter', 'partial', 'effect', 'component'],
+    // Internal modules that are exposed for plugins
+    pluginAPI   = {
+        utils: utils,
+        config: config,
+        transition: require('./transition'),
+        observer: require('./observer')
+    }
 
 ViewModel.options = config.globalAssets = {
     directives  : require('./directives'),
@@ -4831,7 +4962,7 @@ assetTypes.forEach(function (type) {
         }
         if (!value) return hash[id]
         if (type === 'partial') {
-            value = utils.toFragment(value)
+            value = utils.parseTemplateOption(value)
         } else if (type === 'component') {
             value = utils.toConstructor(value)
         } else if (type === 'filter') {
@@ -4886,8 +5017,8 @@ ViewModel.use = function (plugin) {
 /**
  *  Expose internal modules for plugins
  */
-ViewModel.require = function (path) {
-    return require('./' + path)
+ViewModel.require = function (module) {
+    return pluginAPI[module]
 }
 
 ViewModel.extend = extend
@@ -4909,7 +5040,10 @@ function extend (options) {
     }
 
     // inherit options
-    options = inheritOptions(options, ParentVM.options, true)
+    // but only when the super class is not the native Vue.
+    if (ParentVM !== ViewModel) {
+        options = inheritOptions(options, ParentVM.options, true)
+    }
     utils.processOptions(options)
 
     var ExtendedVM = function (opts, asParent) {
@@ -4984,7 +5118,7 @@ function inheritOptions (child, parent, topLevel) {
 }
 
 module.exports = ViewModel
-},{"./config":9,"./directives":14,"./filters":24,"./observer":26,"./transition":28,"./utils":29,"./viewmodel":30}],26:[function(require,module,exports){
+},{"./config":9,"./directives":14,"./filters":24,"./observer":27,"./transition":30,"./utils":31,"./viewmodel":32}],27:[function(require,module,exports){
 /* jshint proto:true */
 
 var Emitter  = require('./emitter'),
@@ -5121,9 +5255,7 @@ var ObjProxy = Object.create(Object.prototype)
 def(ObjProxy, '$add', function (key, val) {
     if (hasOwn.call(this, key)) return
     this[key] = val
-    convertKey(this, key)
-    // emit a propagating set event
-    this.__emitter__.emit('set', key, val, true)
+    convertKey(this, key, true)
 }, !hasProto)
 
 def(ObjProxy, '$delete', function (key) {
@@ -5222,7 +5354,7 @@ function watchArray (arr) {
  *  so it emits get/set events.
  *  Then watch the value itself.
  */
-function convertKey (obj, key) {
+function convertKey (obj, key, propagate) {
     var keyPrefix = key.charAt(0)
     if (keyPrefix === '$' || keyPrefix === '_') {
         return
@@ -5233,7 +5365,7 @@ function convertKey (obj, key) {
     var emitter = obj.__emitter__,
         values  = emitter.values
 
-    init(obj[key])
+    init(obj[key], propagate)
 
     oDef(obj, key, {
         enumerable: true,
@@ -5433,13 +5565,62 @@ var pub = module.exports = {
     convert     : convert,
     convertKey  : convertKey
 }
-},{"./emitter":22,"./utils":29}],27:[function(require,module,exports){
+},{"./emitter":22,"./utils":31}],28:[function(require,module,exports){
+var toFragment = require('./fragment');
+
+/**
+ * Parses a template string or node and normalizes it into a
+ * a node that can be used as a partial of a template option
+ *
+ * Possible values include
+ * id selector: '#some-template-id'
+ * template string: '<div><span>my template</span></div>'
+ * DocumentFragment object
+ * Node object of type Template
+ */
+module.exports = function(template) {
+    var templateNode;
+
+    if (template instanceof window.DocumentFragment) {
+        // if the template is already a document fragment -- do nothing
+        return template
+    }
+
+    if (typeof template === 'string') {
+        // template by ID
+        if (template.charAt(0) === '#') {
+            templateNode = document.getElementById(template.slice(1))
+            if (!templateNode) return
+        } else {
+            return toFragment(template)
+        }
+    } else if (template.nodeType) {
+        templateNode = template
+    } else {
+        return
+    }
+
+    // if its a template tag and the browser supports it,
+    // its content is already a document fragment!
+    if (templateNode.tagName === 'TEMPLATE' && templateNode.content) {
+        return templateNode.content
+    }
+
+    if (templateNode.tagName === 'SCRIPT') {
+        return toFragment(templateNode.innerHTML)
+    }
+
+    return toFragment(templateNode.outerHTML);
+}
+
+},{"./fragment":25}],29:[function(require,module,exports){
 var openChar        = '{',
     endChar         = '}',
     ESCAPE_RE       = /[-.*+?^${}()|[\]\/\\]/g,
-    BINDING_RE      = buildInterpolationRegex(),
     // lazy require
     Directive
+
+exports.Regex = buildInterpolationRegex()
 
 function buildInterpolationRegex () {
     var open = escapeRegex(openChar),
@@ -5452,10 +5633,10 @@ function escapeRegex (str) {
 }
 
 function setDelimiters (delimiters) {
-    exports.delimiters = delimiters
     openChar = delimiters[0]
     endChar = delimiters[1]
-    BINDING_RE = buildInterpolationRegex()
+    exports.delimiters = delimiters
+    exports.Regex = buildInterpolationRegex()
 }
 
 /** 
@@ -5466,10 +5647,10 @@ function setDelimiters (delimiters) {
  *  3. object with key & html = true
  */
 function parse (text) {
-    if (!BINDING_RE.test(text)) return null
+    if (!exports.Regex.test(text)) return null
     var m, i, token, match, tokens = []
     /* jshint boss: true */
-    while (m = text.match(BINDING_RE)) {
+    while (m = text.match(exports.Regex)) {
         i = m.index
         if (i > 0) tokens.push(text.slice(0, i))
         token = { key: m[1].trim() }
@@ -5529,7 +5710,7 @@ exports.parse         = parse
 exports.parseAttr     = parseAttr
 exports.setDelimiters = setDelimiters
 exports.delimiters    = [openChar, endChar]
-},{"./directive":11}],28:[function(require,module,exports){
+},{"./directive":11}],30:[function(require,module,exports){
 var endEvents  = sniffEndEvents(),
     config     = require('./config'),
     // batch enter animations so we only force the layout once
@@ -5600,8 +5781,6 @@ var transition = module.exports = function (el, stage, cb, compiler) {
     }
 
 }
-
-transition.codes = codes
 
 /**
  *  Togggle a CSS class to trigger transition
@@ -5740,9 +5919,9 @@ function sniffEndEvents () {
     var el = document.createElement('vue'),
         defaultEvent = 'transitionend',
         events = {
+            'webkitTransition' : 'webkitTransitionEnd',
             'transition'       : defaultEvent,
-            'mozTransition'    : defaultEvent,
-            'webkitTransition' : 'webkitTransitionEnd'
+            'mozTransition'    : defaultEvent
         },
         ret = {}
     for (var name in events) {
@@ -5756,25 +5935,56 @@ function sniffEndEvents () {
         : 'webkitAnimationEnd'
     return ret
 }
-},{"./batcher":6,"./config":9}],29:[function(require,module,exports){
-var config    = require('./config'),
-    toString  = ({}).toString,
-    win       = window,
-    console   = win.console,
-    timeout   = win.setTimeout,
-    def       = Object.defineProperty,
-    THIS_RE   = /[^\w]this[^\w]/,
-    OBJECT    = 'object',
+
+// Expose some stuff for testing purposes
+transition.codes = codes
+transition.sniff = sniffEndEvents
+},{"./batcher":6,"./config":9}],31:[function(require,module,exports){
+var config       = require('./config'),
+    toString     = ({}).toString,
+    win          = window,
+    console      = win.console,
+    def          = Object.defineProperty,
+    OBJECT       = 'object',
+    THIS_RE      = /[^\w]this[^\w]/,
+    BRACKET_RE_S = /\['([^']+)'\]/g,
+    BRACKET_RE_D = /\["([^"]+)"\]/g,
     hasClassList = 'classList' in document.documentElement,
     ViewModel // late def
 
+var defer =
+    win.requestAnimationFrame ||
+    win.webkitRequestAnimationFrame ||
+    win.setTimeout
+
+/**
+ *  Normalize keypath with possible brackets into dot notations
+ */
+function normalizeKeypath (key) {
+    return key.indexOf('[') < 0
+        ? key
+        : key.replace(BRACKET_RE_S, '.$1')
+             .replace(BRACKET_RE_D, '.$1')
+}
+
 var utils = module.exports = {
+
+    /**
+     *  Convert a string template to a dom fragment
+     */
+    toFragment: require('./fragment'),
+
+    /**
+     *  Parse the various types of template options
+     */
+    parseTemplateOption: require('./template-parser.js'),
 
     /**
      *  get a value from an object keypath
      */
     get: function (obj, key) {
         /* jshint eqeqeq: false */
+        key = normalizeKeypath(key)
         if (key.indexOf('.') < 0) {
             return obj[key]
         }
@@ -5791,6 +6001,7 @@ var utils = module.exports = {
      */
     set: function (obj, key, val) {
         /* jshint eqeqeq: false */
+        key = normalizeKeypath(key)
         if (key.indexOf('.') < 0) {
             obj[key] = val
             return
@@ -5924,36 +6135,6 @@ var utils = module.exports = {
     },
 
     /**
-     *  Convert a string template to a dom fragment
-     */
-    toFragment: function (template) {
-        if (typeof template !== 'string') {
-            return template
-        }
-        if (template.charAt(0) === '#') {
-            var templateNode = document.getElementById(template.slice(1))
-            if (!templateNode) return
-            // if its a template tag and the browser supports it,
-            // its content is already a document fragment!
-            if (templateNode.tagName === 'TEMPLATE' && templateNode.content) {
-                return templateNode.content
-            }
-            template = templateNode.innerHTML
-        }
-        var node = document.createElement('div'),
-            frag = document.createDocumentFragment(),
-            child
-        node.innerHTML = template.trim()
-        /* jshint boss: true */
-        while (child = node.firstChild) {
-            if (node.nodeType === 1) {
-                frag.appendChild(child)
-            }
-        }
-        return frag
-    },
-
-    /**
      *  Convert the object to a ViewModel constructor
      *  if it is not already one
      */
@@ -5992,7 +6173,7 @@ var utils = module.exports = {
         }
         if (partials) {
             for (key in partials) {
-                partials[key] = utils.toFragment(partials[key])
+                partials[key] = utils.parseTemplateOption(partials[key])
             }
         }
         if (filters) {
@@ -6001,7 +6182,7 @@ var utils = module.exports = {
             }
         }
         if (template) {
-            options.template = utils.toFragment(template)
+            options.template = utils.parseTemplateOption(template)
         }
     },
 
@@ -6009,7 +6190,7 @@ var utils = module.exports = {
      *  used to defer batch updates
      */
     nextTick: function (cb) {
-        timeout(cb, 0)
+        defer(cb, 0)
     },
 
     /**
@@ -6085,7 +6266,7 @@ function enableDebug () {
         }
     }
 }
-},{"./config":9,"./viewmodel":30}],30:[function(require,module,exports){
+},{"./config":9,"./fragment":25,"./template-parser.js":28,"./viewmodel":32}],32:[function(require,module,exports){
 var Compiler   = require('./compiler'),
     utils      = require('./utils'),
     transition = require('./transition'),
@@ -6104,13 +6285,23 @@ var Compiler   = require('./compiler'),
  *  and a few reserved methods
  */
 function ViewModel (options) {
-    // just compile. options are passed directly to compiler
+    // compile if options passed, if false return. options are passed directly to compiler
+    if (options === false) return
     new Compiler(this, options)
 }
 
 // All VM prototype methods are inenumerable
 // so it can be stringified/looped through as raw data
 var VMProto = ViewModel.prototype
+
+/**
+ *  init allows config compilation after instantiation:
+ *    var a = new Vue(false)
+ *    a.init(config)
+ */
+def(VMProto, '$init', function (options) {
+    new Compiler(this, options)
+})
 
 /**
  *  Convenience function to get a value from
@@ -6169,8 +6360,8 @@ def(VMProto, '$unwatch', function (key, callback) {
 /**
  *  unbind everything, remove everything
  */
-def(VMProto, '$destroy', function () {
-    this.$compiler.destroy()
+def(VMProto, '$destroy', function (noRemove) {
+    this.$compiler.destroy(noRemove)
 })
 
 /**
@@ -6182,7 +6373,7 @@ def(VMProto, '$broadcast', function () {
         child
     while (i--) {
         child = children[i]
-        child.emitter.emit.apply(child.emitter, arguments)
+        child.emitter.applyEmit.apply(child.emitter, arguments)
         child.vm.$broadcast.apply(child.vm, arguments)
     }
 })
@@ -6194,7 +6385,7 @@ def(VMProto, '$dispatch', function () {
     var compiler = this.$compiler,
         emitter = compiler.emitter,
         parent = compiler.parent
-    emitter.emit.apply(emitter, arguments)
+    emitter.applyEmit.apply(emitter, arguments)
     if (parent) {
         parent.vm.$dispatch.apply(parent.vm, arguments)
     }
@@ -6204,9 +6395,15 @@ def(VMProto, '$dispatch', function () {
  *  delegate on/off/once to the compiler's emitter
  */
 ;['emit', 'on', 'off', 'once'].forEach(function (method) {
+    // internal emit has fixed number of arguments.
+    // exposed emit uses the external version
+    // with fn.apply.
+    var realMethod = method === 'emit'
+        ? 'applyEmit'
+        : method
     def(VMProto, '$' + method, function () {
         var emitter = this.$compiler.emitter
-        emitter[method].apply(emitter, arguments)
+        emitter[realMethod].apply(emitter, arguments)
     })
 })
 
@@ -6260,41 +6457,34 @@ function query (el) {
 }
 
 module.exports = ViewModel
-},{"./batcher":6,"./compiler":8,"./transition":28,"./utils":29}],31:[function(require,module,exports){
-require('insert-css')(require('./index.styl'));
 
+},{"./batcher":6,"./compiler":8,"./transition":30,"./utils":31}],33:[function(require,module,exports){
+require("insert-css")("#app .v-enter{-webkit-animation:fadein .5s;-webkit-animation-delay:.2s;animation:fadein .5s;animation-delay:.2s;opacity:0}#app .v-leave{-webkit-animation:fadeout .2s;animation:fadeout .2s}@-moz-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-webkit-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-o-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-moz-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@-webkit-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@-o-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}");
+var __vue_template__ = "<div v-view=\"view\" v-animation=\"\"></div>";
 module.exports = {
-  template: require('./index.html'),
-  methods: {
-    fetch: function(e) {
-      e.preventDefault();
-      return this.$parent.fetchTopTracks();
-    }
+  el: '#app',
+  className: "container",
+  data: {
+    view: "top"
   }
 };
 
+module.exports.template = __vue_template__;
 
-},{"./index.html":32,"./index.styl":33,"insert-css":2}],32:[function(require,module,exports){
-module.exports = '<form class="form-horizontal" role="form" v-on="submit: fetch" >\n  <div class="form-group">\n    <label for="js-input-location" class="col-sm-1 control-label">Artist</label>\n    <div class="col-sm-11">\n      <input type="text" v-model="artist" class="form-control" placeholder="Input Atrist Name" required>\n    </div>\n  </div>\n  <div class="form-group">\n    <div class="col-sm-offset-1 col-sm-11">\n      <button type="submit" class="btn btn-primary"><span class="glyphicon glyphicon-search">search</span></button>\n    </div>\n  </div>\n</form>\n';
-},{}],33:[function(require,module,exports){
-module.exports = "";
-},{}],34:[function(require,module,exports){
-var Vue, request;
-
-require('insert-css')(require('./index.styl'));
-
-Vue = require('vue');
+},{"insert-css":2}],34:[function(require,module,exports){
+require("insert-css")(".artist h1{font-family:'Poiret One',cursive}");
+var __vue_template__ = "<link href=\"http://fonts.googleapis.com/css?family=Poiret+One&amp;subset=latin,cyrillic\" rel=\"stylesheet\" type=\"text/css\">\n  <header class=\"page-header\">\n    <h1>Artist Top Tracks <small>by Last.FM</small></h1>\n  </header>\n  <div v-component=\"nav\"></div>\n  <article class=\"main-content\">\n    <div v-component=\"input-artist\"></div>\n    <div v-component=\"tracks\"></div>\n  </article>\n  <div v-component=\"footer\"></div>";
+var request;
 
 request = require('superagent');
 
-module.exports = Vue.extend({
+module.exports = {
   id: "artist",
-  template: require('./index.html'),
   className: "artist",
   components: {
-    "nav": require('../nav/index.coffee'),
-    "input-artist": require('./components/input-artist/index.coffee'),
-    "tracks": require('../tracks/index.coffee')
+    "nav": require('./nav.vue'),
+    "input-artist": require('./input-artist.vue'),
+    "tracks": require('./tracks.vue')
   },
   data: {
     artist: "radiohead",
@@ -6309,48 +6499,23 @@ module.exports = Vue.extend({
       })(this));
     }
   }
-});
-
-
-},{"../nav/index.coffee":46,"../tracks/index.coffee":53,"./components/input-artist/index.coffee":31,"./index.html":35,"./index.styl":36,"insert-css":2,"superagent":3,"vue":25}],35:[function(require,module,exports){
-module.exports = '<link href=\'http://fonts.googleapis.com/css?family=Poiret+One&subset=latin,cyrillic\' rel=\'stylesheet\' type=\'text/css\'>\n<header class="page-header">\n  <h1>Artist Top Tracks <small>by Last.FM</small></h1>\n</header>\n<div v-component="nav"></div>\n<article class="main-content">\n  <div v-component="input-artist"></div>\n  <div v-component="tracks"></div>\n</article>\n<div v-partial="footer"></div>\n';
-},{}],36:[function(require,module,exports){
-module.exports = ".artist h1{font-family:'Poiret One',cursive}";
-},{}],37:[function(require,module,exports){
-require('insert-css')(require('./index.styl'));
-
-module.exports = {
-  template: require('./index.html'),
-  className: "select-country",
-  methods: {
-    fetch: function(e) {
-      e.preventDefault();
-      return this.$parent.fetchTopTracks();
-    }
-  }
 };
 
+module.exports.template = __vue_template__;
 
-},{"./index.html":38,"./index.styl":39,"insert-css":2}],38:[function(require,module,exports){
-module.exports = '<form class="form-horizontal" role="form" v-on="submit: fetch" >\n  <div class="form-group">\n    <label for="inputCountry" class="col-sm-1 control-label">Country</label>\n    <div class="col-sm-5">\n      <select v-model="selectCountry" class="form-control">\n        <option  v-repeat="countries" value="{{$value}}">{{$value}}</option>\n      </select>\n    </div>\n  </div>\n  <div class="form-group">\n    <div class="col-sm-offset-1 col-sm-11">\n      <button type="submit" class="btn btn-primary"><span class="glyphicon glyphicon-search">search</span></button>\n    </div>\n  </div>\n</form>\n';
-},{}],39:[function(require,module,exports){
-module.exports=require(33)
-},{}],40:[function(require,module,exports){
-var Vue, request;
-
-require('insert-css')(require('./index.styl'));
-
-Vue = require('vue');
+},{"./input-artist.vue":38,"./nav.vue":39,"./tracks.vue":42,"insert-css":2,"superagent":3}],35:[function(require,module,exports){
+require("insert-css")(".country h1{font-family:'Roboto Condensed',sans-serif}");
+var __vue_template__ = "<link href=\"http://fonts.googleapis.com/css?family=Roboto+Condensed&amp;subset=latin,cyrillic\" rel=\"stylesheet\" type=\"text/css\">\n  <header class=\"page-header\">\n    <h1>Country Top Tracks <small>by Last.FM</small></h1>\n  </header>\n  <div v-component=\"nav\"></div>\n  <article class=\"main-content\">\n    <div v-component=\"select-country\"></div>\n    <div v-component=\"tracks\"></div>\n  </article>\n  <div v-component=\"footer\"></div>";
+var request;
 
 request = require('superagent');
 
-module.exports = Vue.extend({
-  template: require('./index.html'),
+module.exports = {
   className: "country",
   components: {
-    "nav": require('../nav/index.coffee'),
-    "select-country": require('./components/select-country/index.coffee'),
-    "tracks": require('../tracks/index.coffee')
+    "nav": require('./nav.vue'),
+    "select-country": require('./select-country.vue'),
+    "tracks": require('./tracks.vue')
   },
   data: {
     countries: ['Japan', 'United States', 'United Kingdom'],
@@ -6366,106 +6531,92 @@ module.exports = Vue.extend({
       })(this));
     }
   }
-});
+};
+
+module.exports.template = __vue_template__;
+
+},{"./nav.vue":39,"./select-country.vue":40,"./tracks.vue":42,"insert-css":2,"superagent":3}],36:[function(require,module,exports){
+var __vue_template__ = "<footer>\n    <div class=\"well well-lg\">\n      <a href=\"#\">TOP</a>&nbsp;|&nbsp;\n      <a href=\"https://github.com/koba04/vue-boilerplate\">github</a>\n    </div>\n  </footer>";
 
 
-},{"../nav/index.coffee":46,"../tracks/index.coffee":53,"./components/select-country/index.coffee":37,"./index.html":41,"./index.styl":42,"insert-css":2,"superagent":3,"vue":25}],41:[function(require,module,exports){
-module.exports = '<link href=\'http://fonts.googleapis.com/css?family=Roboto+Condensed&subset=latin,cyrillic\' rel=\'stylesheet\' type=\'text/css\'>\n<header class="page-header">\n  <h1>Country Top Tracks <small>by Last.FM</small></h1>\n</header>\n<div v-component="nav"></div>\n<article class="main-content">\n  <div v-component="select-country"></div>\n  <div v-component="tracks"></div>\n</article>\n<div v-partial="footer"></div>\n';
-},{}],42:[function(require,module,exports){
-module.exports = ".country h1{font-family:'Roboto Condensed',sans-serif}";
-},{}],43:[function(require,module,exports){
-var Vue, app, director, router;
+module.exports.template = __vue_template__;
 
-Vue = require('vue');
+},{}],37:[function(require,module,exports){
+var Vue       = require('vue'),
+    app       = 
+    director  = require('director')
 
-director = require('director');
+// register component
+Vue.component('top',      require('./top.vue'));
+Vue.component('artist',   require('./artist.vue'));
+Vue.component('country',  require('./country.vue'));
+Vue.component('footer',   require('./footer.vue'));
 
-Vue.component('top', require('./top/index.coffee'));
+var app = new Vue(require('./app.vue'));
 
-Vue.component('artist', require('./artist/index.coffee'));
-
-Vue.component('country', require('./country/index.coffee'));
-
-Vue.partial('footer', require('./partials/footer.html'));
-
-require('insert-css')(require('./index.styl'));
-
-app = new Vue({
-  el: '#app',
-  className: "container",
-  template: require('./index.html'),
-  data: {
-    view: "top"
-  }
-});
-
-router = new director.Router;
-
-router.on('artist', function() {
-  return app.view = 'artist';
-});
-
-router.on('country', function() {
-  return app.view = 'country';
-});
-
-router.on('', function() {
-  return app.view = 'top';
-});
-
+// routing
+var router = new director.Router();
+router.on('artist',   function() { app.view = 'artist';   });
+router.on('country',  function() { app.view = 'country';  });
+router.on('',         function() { app.view = 'top';      });
 router.init();
 
 
-},{"./artist/index.coffee":34,"./country/index.coffee":40,"./index.html":44,"./index.styl":45,"./partials/footer.html":49,"./top/index.coffee":50,"director":1,"insert-css":2,"vue":25}],44:[function(require,module,exports){
-module.exports = '<div v-view="view" v-animation></div>\n';
-},{}],45:[function(require,module,exports){
-module.exports = "#app .v-enter{-webkit-animation:fadein .5s;-webkit-animation-delay:.2s;animation:fadein .5s;animation-delay:.2s;opacity:0}#app .v-leave{-webkit-animation:fadeout .2s;animation:fadeout .2s}@-moz-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-webkit-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-o-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-ms-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-moz-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@-webkit-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@-o-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@-ms-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}";
-},{}],46:[function(require,module,exports){
-require('insert-css')(require('./index.styl'));
-
+},{"./app.vue":33,"./artist.vue":34,"./country.vue":35,"./footer.vue":36,"./top.vue":41,"director":1,"vue":26}],38:[function(require,module,exports){
+var __vue_template__ = "<form class=\"form-horizontal\" role=\"form\" v-on=\"submit: fetch\">\n    <div class=\"form-group\">\n      <label for=\"js-input-location\" class=\"col-sm-1 control-label\">Artist</label>\n      <div class=\"col-sm-11\">\n        <input type=\"text\" v-model=\"artist\" class=\"form-control\" placeholder=\"Input Atrist Name\" required=\"\">\n      </div>\n    </div>\n    <div class=\"form-group\">\n      <div class=\"col-sm-offset-1 col-sm-11\">\n        <button type=\"submit\" class=\"btn btn-primary\"><span class=\"glyphicon glyphicon-search\">search</span></button>\n      </div>\n    </div>\n  </form>";
 module.exports = {
-  template: require('./index.html'),
+  methods: {
+    fetch: function(e) {
+      e.preventDefault();
+      return this.$parent.fetchTopTracks();
+    }
+  }
+};
+
+module.exports.template = __vue_template__;
+
+},{}],39:[function(require,module,exports){
+require("insert-css")(".nav-content .nav margin-bottom:20px border-bottom:solid #eee");
+var __vue_template__ = "<ul class=\"nav nav-pills nav-justified\">\n    <li v-class=\"active: $parent.artist\"><a href=\"#artist\">Atrist</a></li>\n    <li v-class=\"active: $parent.selectCountry\"><a href=\"#country\">Country</a></li>\n  </ul>";
+module.exports = {
   className: "nav-content"
 };
 
+module.exports.template = __vue_template__;
 
-},{"./index.html":47,"./index.styl":48,"insert-css":2}],47:[function(require,module,exports){
-module.exports = '<ul class="nav nav-pills nav-justified">\n  <li v-class="active: $parent.artist"><a href="#artist">Atrist</a></li>\n  <li v-class="active: $parent.selectCountry"><a href="#country">Country</a></li>\n</ul>\n';
-},{}],48:[function(require,module,exports){
-module.exports = ".nav-content .nav{margin-bottom:20px;border-bottom:solid #eee}";
-},{}],49:[function(require,module,exports){
-module.exports = '<footer>\n  <div class="well well-lg">\n    <a href="#">TOP</a>&nbsp;|&nbsp;\n    <a href="https://github.com/koba04/vue-boilerplate">github</a>\n  </div>\n</footer>\n';
-},{}],50:[function(require,module,exports){
-var Vue;
+},{"insert-css":2}],40:[function(require,module,exports){
+var __vue_template__ = "<form class=\"form-horizontal\" role=\"form\" v-on=\"submit: fetch\">\n    <div class=\"form-group\">\n      <label for=\"inputCountry\" class=\"col-sm-1 control-label\">Country</label>\n      <div class=\"col-sm-5\">\n        <select v-model=\"selectCountry\" class=\"form-control\">\n          <option v-repeat=\"countries\" value=\"{{$value}}\">{{$value}}</option>\n        </select>\n      </div>\n    </div>\n    <div class=\"form-group\">\n      <div class=\"col-sm-offset-1 col-sm-11\">\n        <button type=\"submit\" class=\"btn btn-primary\"><span class=\"glyphicon glyphicon-search\">search</span></button>\n      </div>\n    </div>\n  </form>";
+module.exports = {
+  className: "select-country",
+  methods: {
+    fetch: function(e) {
+      e.preventDefault();
+      return this.$parent.fetchTopTracks();
+    }
+  }
+};
 
-require('insert-css')(require('./index.styl'));
+module.exports.template = __vue_template__;
 
-Vue = require('vue');
-
-module.exports = Vue.extend({
-  template: require('./index.html'),
+},{}],41:[function(require,module,exports){
+require("insert-css")(".top h1 font-family:'Playfair Display SC',serif");
+var __vue_template__ = "<link href=\"http://fonts.googleapis.com/css?family=Playfair+Display+SC&amp;subset=latin,cyrillic\" rel=\"stylesheet\" type=\"text/css\">\n  <header class=\"page-header\">\n    <h1>TopPage</h1>\n  </header>\n  <div v-component=\"nav\"></div>\n  <article>\n    <p>Please select artist or country</p>\n  </article>\n  <div v-component=\"footer\"></div>";
+module.exports = {
   className: 'top',
   components: {
-    "nav": require('../nav/index.coffee')
+    "nav": require('./nav.vue')
   }
-});
+};
 
+module.exports.template = __vue_template__;
 
-},{"../nav/index.coffee":46,"./index.html":51,"./index.styl":52,"insert-css":2,"vue":25}],51:[function(require,module,exports){
-module.exports = '<link href=\'http://fonts.googleapis.com/css?family=Playfair+Display+SC&subset=latin,cyrillic\' rel=\'stylesheet\' type=\'text/css\'>\n<header class="page-header">\n  <h1>TopPage</h1>\n</header>\n<div v-component="nav"></div>\n<article>\n  <p>Please select artist or country</p>\n</article>\n<div v-partial="footer"></div>\n';
-},{}],52:[function(require,module,exports){
-module.exports = ".top h1{font-family:'Playfair Display SC',serif}";
-},{}],53:[function(require,module,exports){
-require('insert-css')(require('./index.styl'));
-
+},{"./nav.vue":39,"insert-css":2}],42:[function(require,module,exports){
+require("insert-css")(".tracks .track{font-size:20px;margin-right:10px}.tracks .artist{font-size:14px;margin-right:10px}");
+var __vue_template__ = "<ul class=\"list-group\">\n    <li class=\"list-group-item\" v-repeat=\"tracks\">\n      <span class=\"label label-info\">{{$index+1}}</span>\n      <a href=\"{{url}}\" target=\"_blank\"><span class=\"track\">{{name}}</span></a>\n      <span class=\"artist\">{{artist.name}}</span>\n      <small class=\"listeners glyphicon glyphicon-headphones\">{{listeners}}</small>\n    </li>\n  </ul>";
 module.exports = {
-  template: require('./index.html'),
   className: "tracks"
 };
 
+module.exports.template = __vue_template__;
 
-},{"./index.html":54,"./index.styl":55,"insert-css":2}],54:[function(require,module,exports){
-module.exports = '<ul class="list-group">\n  <li class="list-group-item" v-repeat="tracks">\n    <span class="label label-info">{{$index+1}}</span>\n    <a href="{{url}}" target="_blank"><span class="track">{{name}}</span></a>\n    <span class="artist">{{artist.name}}</span>\n    <small class="listeners glyphicon glyphicon-headphones">{{listeners}}</small>\n  </li>\n</ul>\n';
-},{}],55:[function(require,module,exports){
-module.exports = ".tracks .track{font-size:20px;margin-right:10px}.tracks .artist{font-size:14px;margin-right:10px}";
-},{}]},{},[43])
+},{"insert-css":2}]},{},[37])
