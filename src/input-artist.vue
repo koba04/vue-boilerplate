@@ -1,9 +1,10 @@
 <script lang="coffee">
   module.exports =
+    inherit: true
     methods:
       fetch: (e) ->
         e.preventDefault()
-        @$parent.fetchTopTracks()
+        @fetchTopTracks()
 </script>
 
 <template>

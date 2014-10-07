@@ -2,12 +2,11 @@
   request = require 'superagent'
 
   module.exports =
-    className: "country"
     components:
       "nav":            require './nav.vue'
       "select-country": require './select-country.vue'
       "tracks":         require './tracks.vue'
-    data:
+    data: ->
       countries: ['Japan', 'United States', 'United Kingdom'],
       selectCountry: 'Japan'
       tracks: []
@@ -22,19 +21,21 @@
 
 <template>
   <link href='http://fonts.googleapis.com/css?family=Roboto+Condensed&subset=latin,cyrillic' rel='stylesheet' type='text/css'>
-  <header class="page-header">
-    <h1>Country Top Tracks <small>by Last.FM</small></h1>
-  </header>
-  <div v-component="nav"></div>
-  <article class="main-content">
-    <div v-component="select-country"></div>
-    <div v-component="tracks"></div>
-  </article>
-  <div v-component="footer"></div>
+  <div class="country">
+    <header class="page-header">
+      <h1>Country Top Tracks <small>by Last.FM</small></h1>
+    </header>
+    <div v-component="nav"></div>
+    <article class="main-content">
+      <div v-component="select-country"></div>
+      <div v-component="tracks"></div>
+    </article>
+    <div v-component="footer"></div>
+  </div>
 </template>
 
 <style lang="stylus">
-  .country
-    h1
-      font-family: 'Roboto Condensed', sans-serif
+.country
+  h1
+    font-family: 'Roboto Condensed', sans-serif
 </style>

@@ -1,5 +1,4 @@
 var Vue       = require('vue'),
-    app       = 
     director  = require('director')
 
 // register component
@@ -9,6 +8,7 @@ Vue.component('country',  require('./country.vue'));
 Vue.component('footer',   require('./footer.vue'));
 
 var app = new Vue(require('./app.vue'));
+app.$mount('#app');
 
 // routing
 var router = new director.Router();

@@ -1,4 +1,5 @@
 <script lang="coffee">
+  module.exports = {}
 </script>
 
 <template>

@@ -1,13 +1,11 @@
 <script lang="coffee">
   module.exports =
-    el: '#app'
-    className: "container"
-    data:
+    data: ->
       view: "top"
 </script>
 
 <template>
-  <div v-view="view" v-animation></div>
+  <div v-component="{{view}}" v-transition></div>
 </template>
 
 <style lang="stylus">
