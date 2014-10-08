@@ -2149,11 +2149,13 @@ var transition = require('../transition')
  */
 
 exports.$appendTo = function (target, cb, withTransition) {
+  target = query(target)
   var targetIsDetached = !_.inDoc(target)
   var op = withTransition === false || targetIsDetached
     ? append
     : transition.append
   insert(this, target, op, targetIsDetached, cb)
+  return this
 }
 
 /**
@@ -2171,6 +2173,7 @@ exports.$prependTo = function (target, cb, withTransition) {
   } else {
     this.$appendTo(target, cb, withTransition)
   }
+  return this
 }
 
 /**
@@ -2182,11 +2185,13 @@ exports.$prependTo = function (target, cb, withTransition) {
  */
 
 exports.$before = function (target, cb, withTransition) {
+  target = query(target)
   var targetIsDetached = !_.inDoc(target)
   var op = withTransition === false || targetIsDetached
     ? before
     : transition.before
   insert(this, target, op, targetIsDetached, cb)
+  return this
 }
 
 /**
@@ -2204,6 +2209,7 @@ exports.$after = function (target, cb, withTransition) {
   } else {
     this.$appendTo(target.parentNode, cb, withTransition)
   }
+  return this
 }
 
 /**
@@ -2238,6 +2244,7 @@ exports.$remove = function (cb, withTransition) {
       : transition.remove
     op(this.$el, this, realCb)
   }
+  return this
 }
 
 /**
@@ -2251,7 +2258,6 @@ exports.$remove = function (cb, withTransition) {
  */
 
 function insert (vm, target, op, targetIsDetached, cb) {
-  target = query(target)
   var shouldCallHook =
     !targetIsDetached &&
     !vm._isAttached &&
@@ -2354,6 +2360,7 @@ exports.$on = function (event, fn) {
   (this._events[event] || (this._events[event] = []))
     .push(fn)
   modifyListenerCount(this, event, 1)
+  return this
 }
 
 /**
@@ -2372,6 +2379,7 @@ exports.$once = function (event, fn) {
   }
   on.fn = fn
   this.$on(event, on)
+  return this
 }
 
 /**
@@ -2395,15 +2403,17 @@ exports.$off = function (event, fn) {
       }
     }
     this._events = {}
-    return
+    return this
   }
   // specific event
   cbs = this._events[event]
-  if (!cbs) return
+  if (!cbs) {
+    return this
+  }
   if (arguments.length === 1) {
     modifyListenerCount(this, event, -cbs.length)
     this._events[event] = null
-    return
+    return this
   }
   // specific handler
   var cb
@@ -2416,6 +2426,7 @@ exports.$off = function (event, fn) {
       break
     }
   }
+  return this
 }
 
 /**
@@ -2445,6 +2456,7 @@ exports.$emit = function (event) {
       }
     }
   }
+  return this
 }
 
 /**
@@ -2468,6 +2480,7 @@ exports.$broadcast = function (event) {
       }
     }
   }
+  return this
 }
 
 /**
@@ -2485,6 +2498,7 @@ exports.$dispatch = function () {
       ? null
       : parent.$parent
   }
+  return this
 }
 
 /**
@@ -2662,7 +2676,9 @@ exports.$mount = function (el) {
     _.warn('$mount() should be called only once.')
     return
   }
-  if (typeof el === 'string') {
+  if (!el) {
+    el = document.createElement('div')
+  } else if (typeof el === 'string') {
     var selector = el
     el = document.querySelector(el)
     if (!el) {
@@ -2681,6 +2697,7 @@ exports.$mount = function (el) {
     this._initDOMHooks()
     this.$once('hook:attached', ready)
   }
+  return this
 }
 
 /**
@@ -2767,7 +2784,6 @@ var _ = require('./util')
  */
 
 function Batcher () {
-  this._preFlush = null
   this.reset()
 }
 
@@ -2807,10 +2823,6 @@ p.push = function (job) {
  */
 
 p.flush = function () {
-  // before flush hook
-  if (this._preFlush) {
-    this._preFlush()
-  }
   // do not cache length because more jobs might be pushed
   // as we run existing jobs
   for (var i = 0; i < this.queue.length; i++) {
@@ -3066,33 +3078,27 @@ function compileNode (node, options) {
  */
 
 function compileElement (el, options) {
-  var hasAttributes = el.hasAttributes()
-  var tag = el.tagName.toLowerCase()
-  if (hasAttributes) {
-    // check terminal direcitves
-    var terminalLinkFn
-    for (var i = 0; i < 3; i++) {
-      terminalLinkFn = checkTerminalDirectives(el, options)
-      if (terminalLinkFn) {
-        terminalLinkFn.terminal = true
-        return terminalLinkFn
-      }
+  var linkFn, tag, component
+  // check custom element component, but only on non-root
+  if (!el.__vue__) {
+    tag = el.tagName.toLowerCase()
+    component =
+      tag.indexOf('-') > 0 &&
+      options.components[tag]
+    if (component) {
+      el.setAttribute(config.prefix + 'component', tag)
     }
   }
-  // check custom element component
-  var component =
-    tag.indexOf('-') > 0 &&
-    options.components[tag]
-  if (component) {
-    return makeTeriminalLinkFn(el, 'component', tag, options)
-  }
-  // check other directives
-  var linkFn
-  if (hasAttributes) {
-    var directives = collectDirectives(el, options)
-    linkFn = directives.length
-      ? makeDirectivesLinkFn(directives)
-      : null
+  if (component || el.hasAttributes()) {
+    // check terminal direcitves
+    linkFn = checkTerminalDirectives(el, options)
+    // if not terminal, build normal link function
+    if (!linkFn) {
+      var directives = collectDirectives(el, options)
+      linkFn = directives.length
+        ? makeDirectivesLinkFn(directives)
+        : null
+    }
   }
   // if the element is a textarea, we need to interpolate
   // its content on initial render.
@@ -3102,6 +3108,7 @@ function compileElement (el, options) {
       el.value = vm.$interpolate(el.value)
       if (realLinkFn) realLinkFn(vm, el)      
     }
+    linkFn.terminal = true
   }
   return linkFn
 }
@@ -3389,9 +3396,11 @@ function checkTerminalDirectives (el, options) {
 function makeTeriminalLinkFn (el, dirName, value, options) {
   var descriptor = dirParser.parse(value)[0]
   var def = options.directives[dirName]
-  return function terminalLinkFn (vm, el) {
+  var terminalLinkFn = function (vm, el) {
     vm._bindDir(dirName, el, descriptor, def)
   }
+  terminalLinkFn.terminal = true
+  return terminalLinkFn
 }
 
 /**
@@ -3534,7 +3543,7 @@ function transcludeTemplate (el, options) {
     collectRawContent(el)
     if (options.replace) {
       if (frag.childNodes.length > 1) {
-        transcludeContent(_.toArray(frag.childNodes))
+        transcludeContent(frag)
         return frag
       } else {
         var replacer = frag.firstChild
@@ -3623,7 +3632,7 @@ var concat = [].concat
 function getOutlets (el) {
   return _.isArray(el)
     ? concat.apply([], el.map(getOutlets))
-    : el.nodeType === 1
+    : el.querySelectorAll
       ? _.toArray(el.querySelectorAll('content'))
       : []
 }
@@ -3783,7 +3792,7 @@ p._bind = function (def) {
     this.bind()
   }
   if (
-    this.expression && this.update &&
+    this.update && this._watcherExp &&
     (!this.isLiteral || this._isDynamicLiteral) &&
     !this._checkExpFn()
   ) {
@@ -3933,7 +3942,7 @@ module.exports = {
 }
 
 function defaultHandler (value) {
-  if (value != null) {
+  if (value || value === 0) {
     this.el.setAttribute(this.arg, value)
   } else {
     this.el.removeAttribute(this.arg)
@@ -5010,6 +5019,7 @@ module.exports = {
         }
       } else { // new instance
         vm = this.build(obj, i)
+        vm._new = true
       }
       vms[i] = vm
       // insert if this is first run
@@ -5063,6 +5073,7 @@ module.exports = {
           vm.$before(targetNext.$el)
         }
       }
+      vm._new = false
       vm._reused = false
     }
     return vms
@@ -5092,7 +5103,7 @@ module.exports = {
       meta.$value = raw
     }
     // resolve constructor
-    var Ctor = this.Ctor || this.resolveCtor(data)
+    var Ctor = this.Ctor || this.resolveCtor(data, meta)
     var vm = this.vm.$addChild({
       el: this.template.cloneNode(true),
       _linker: this._linker,
@@ -5111,15 +5122,22 @@ module.exports = {
    * components depending on instance data.
    *
    * @param {Object} data
+   * @param {Object} meta
    * @return {Function}
    */
 
-  resolveCtor: function (data) {
+  resolveCtor: function (data, meta) {
+    // create a temporary context object and copy data
+    // and meta properties onto it.
+    // use _.define to avoid accidentally overwriting scope
+    // properties.
     var context = Object.create(this.vm)
-    for (var key in data) {
-      // use _.define to avoid accidentally
-      // overwriting scope properties
+    var key
+    for (key in data) {
       _.define(context, key, data[key])
+    }
+    for (key in meta) {
+      _.define(context, key, meta[key])
     }
     var id = this.ctorGetter.call(context, context)
     var Ctor = this.vm.$options.components[id]
@@ -5209,10 +5227,10 @@ module.exports = {
       if (cached) {
         var i = 0
         var vm = cached[i]
-        // since duplicated vm instances might be reused
-        // already, we need to return the first non-reused
-        // instance.
-        while (vm && vm._reused) {
+        // since duplicated vm instances might be a reused
+        // one OR a newly created one, we need to return the
+        // first instance that is neither of these.
+        while (vm && (vm._reused || vm._new)) {
           vm = cached[++i]
         }
         return vm
@@ -6057,22 +6075,22 @@ exports._initComputed = function () {
   var computed = this.$options.computed
   if (computed) {
     for (var key in computed) {
-      var def = computed[key]
-      if (typeof def === 'function') {
-        def = {
-          get: _.bind(def, this),
-          set: noop
-        }
+      var userDef = computed[key]
+      var def = {
+        enumerable: true,
+        configurable: true
+      }
+      if (typeof userDef === 'function') {
+        def.get = _.bind(userDef, this)
+        def.set = noop
       } else {
-        def.get = def.get
-          ? _.bind(def.get, this)
+        def.get = userDef.get
+          ? _.bind(userDef.get, this)
           : noop
-        def.set = def.set
-          ? _.bind(def.set, this)
+        def.set = userDef.set
+          ? _.bind(userDef.set, this)
           : noop
       }
-      def.enumerable = true
-      def.configurable = true
       Object.defineProperty(this, key, def)
     }
   }
@@ -6135,7 +6153,8 @@ exports._defineMeta = function (key, value) {
 }
 },{"../binding":13,"../observer":48,"../util":62}],47:[function(require,module,exports){
 var _ = require('../util')
-var arrayAugmentations = Object.create(Array.prototype)
+var arrayProto = Array.prototype
+var arrayMethods = Object.create(arrayProto)
 
 /**
  * Intercept mutating methods and emit events
@@ -6152,8 +6171,8 @@ var arrayAugmentations = Object.create(Array.prototype)
 ]
 .forEach(function (method) {
   // cache original method
-  var original = Array.prototype[method]
-  _.define(arrayAugmentations, method, function mutator () {
+  var original = arrayProto[method]
+  _.define(arrayMethods, method, function mutator () {
     // avoid leaking arguments:
     // http://jsperf.com/closure-with-arguments
     var i = arguments.length
@@ -6192,7 +6211,7 @@ var arrayAugmentations = Object.create(Array.prototype)
  */
 
 _.define(
-  arrayAugmentations,
+  arrayProto,
   '$set',
   function $set (index, val) {
     if (index >= this.length) {
@@ -6210,7 +6229,7 @@ _.define(
  */
 
 _.define(
-  arrayAugmentations,
+  arrayProto,
   '$remove',
   function $remove (index) {
     if (typeof index !== 'number') {
@@ -6222,15 +6241,14 @@ _.define(
   }
 )
 
-module.exports = arrayAugmentations
+module.exports = arrayMethods
 },{"../util":62}],48:[function(require,module,exports){
 var _ = require('../util')
 var config = require('../config')
 var Binding = require('../binding')
-var arrayAugmentations = require('./array')
-var objectAugmentations = require('./object')
-var arrayKeys = Object.getOwnPropertyNames(arrayAugmentations)
-var objectKeys = Object.getOwnPropertyNames(objectAugmentations)
+var arrayMethods = require('./array')
+var arrayKeys = Object.getOwnPropertyNames(arrayMethods)
+require('./object')
 
 var uid = 0
 
@@ -6287,14 +6305,13 @@ function Observer (value, type) {
   this.active = true
   this.bindings = []
   _.define(value, '__ob__', this)
-  var augment = config.proto && _.hasProto
-    ? protoAugment
-    : copyAugment
   if (type === ARRAY) {
-    augment(value, arrayAugmentations, arrayKeys)
+    var augment = config.proto && _.hasProto
+      ? protoAugment
+      : copyAugment
+    augment(value, arrayMethods, arrayKeys)
     this.observeArray(value)
   } else if (type === OBJECT) {
-    augment(value, objectAugmentations, objectKeys)
     this.walk(value)
   }
 }
@@ -6463,7 +6480,7 @@ p.removeVm = function (vm) {
 module.exports = Observer
 },{"../binding":13,"../config":17,"../util":62,"./array":47,"./object":49}],49:[function(require,module,exports){
 var _ = require('../util')
-var objectAgumentations = Object.create(Object.prototype)
+var objProto = Object.prototype
 
 /**
  * Add a new property to an observed object
@@ -6475,15 +6492,19 @@ var objectAgumentations = Object.create(Object.prototype)
  */
 
 _.define(
-  objectAgumentations,
+  objProto,
   '$add',
   function $add (key, val) {
+    var ob = this.__ob__
+    if (!ob) {
+      this[key] = val
+      return
+    }
     if (_.isReserved(key)) {
       _.warn('Refused to $add reserved key: ' + key)
       return
     }
     if (this.hasOwnProperty(key)) return
-    var ob = this.__ob__
     ob.convert(key, val)
     if (ob.vms) {
       var i = ob.vms.length
@@ -6507,16 +6528,20 @@ _.define(
  */
 
 _.define(
-  objectAgumentations,
+  objProto,
   '$delete',
   function $delete (key) {
+    var ob = this.__ob__
+    if (!ob) {
+      delete this[key]
+      return
+    }
     if (_.isReserved(key)) {
       _.warn('Refused to $add reserved key: ' + key)
       return
     }
     if (!this.hasOwnProperty(key)) return
     delete this[key]
-    var ob = this.__ob__
     if (ob.vms) {
       var i = ob.vms.length
       while (i--) {
@@ -6529,8 +6554,6 @@ _.define(
     }
   }
 )
-
-module.exports = objectAgumentations
 },{"../util":62}],50:[function(require,module,exports){
 var _ = require('../util')
 var Cache = require('../cache')
@@ -7215,33 +7238,16 @@ exports.set = function (obj, path, val) {
     obj = obj[key]
     if (!_.isObject(obj)) {
       obj = {}
-      add(last, key, obj)
+      last.$add(key, obj)
     }
   }
   key = path[i]
   if (key in obj) {
     obj[key] = val
   } else {
-    add(obj, key, val)
+    obj.$add(key, val)
   }
   return true
-}
-
-/**
- * Add a property to an object, using $add if target
- * has been augmented by Vue's observer.
- *
- * @param {Object} obj
- * @param {String} key
- * @param {*} val
- */
-
-function add (obj, key, val) {
-  if (obj.$add) {
-    obj.$add(key, val)
-  } else {
-    obj[key] = val
-  }
 }
 },{"../cache":14,"../util":62}],53:[function(require,module,exports){
 var Cache = require('../cache')
@@ -7565,18 +7571,125 @@ function formatToken (token, vm) {
 }
 },{"../cache":14,"../config":17}],55:[function(require,module,exports){
 var _ = require('../util')
-var Batcher = require('../batcher')
-var batcher = new Batcher()
 var transDurationProp = _.transitionProp + 'Duration'
 var animDurationProp = _.animationProp + 'Duration'
 
+var queue = []
+var queued = false
+
 /**
- * Force layout before triggering transitions/animations
+ * Push a job into the transition queue, which is to be
+ * executed on next frame.
+ *
+ * @param {Element} el    - target element
+ * @param {Number} dir    - 1: enter, -1: leave
+ * @param {Function} op   - the actual dom operation
+ * @param {String} cls    - the className to remove when the
+ *                          transition is done.
+ * @param {Function} [cb] - user supplied callback.
  */
 
-batcher._preFlush = function () {
+function push (el, dir, op, cls, cb) {
+  queue.push({
+    el  : el,
+    dir : dir,
+    cb  : cb,
+    cls : cls,
+    op  : op
+  })
+  if (!queued) {
+    queued = true
+    _.nextTick(flush)
+  }
+}
+
+/**
+ * Flush the queue, and do one forced reflow before
+ * triggering transitions.
+ */
+
+function flush () {
   /* jshint unused: false */
   var f = document.documentElement.offsetHeight
+  queue.forEach(run)
+  queue = []
+  queued = false
+}
+
+/**
+ * Run a transition job.
+ *
+ * @param {Object} job
+ */
+
+function run (job) {
+
+  var el = job.el
+  var classList = el.classList
+  var data = el.__v_trans
+  var cls = job.cls
+  var cb = job.cb
+  var op = job.op
+  var transitionType = getTransitionType(el, data, cls)
+
+  if (job.dir > 0) { // ENTER
+    if (transitionType === 1) {
+      // trigger transition by removing enter class
+      classList.remove(cls)
+      // only need to listen for transitionend if there's
+      // a user callback
+      if (cb) setupTransitionCb(_.transitionEndEvent)
+    } else if (transitionType === 2) {
+      // animations are triggered when class is added
+      // so we just listen for animationend to remove it.
+      setupTransitionCb(_.animationEndEvent, function () {
+        classList.remove(cls)
+      })
+    } else {
+      // no transition applicable
+      classList.remove(cls)
+      if (cb) cb()
+    }
+  } else { // LEAVE
+    if (transitionType) {
+      // leave transitions/animations are both triggered
+      // by adding the class, just remove it on end event.
+      var event = transitionType === 1
+        ? _.transitionEndEvent
+        : _.animationEndEvent
+      setupTransitionCb(event, function () {
+        op()
+        classList.remove(cls)
+      })
+    } else {
+      op()
+      classList.remove(cls)
+      if (cb) cb()
+    }
+  }
+
+  /**
+   * Set up a transition end callback, store the callback
+   * on the element's __v_trans data object, so we can
+   * clean it up if another transition is triggered before
+   * the callback is fired.
+   *
+   * @param {String} event
+   * @param {Function} [cleanupFn]
+   */
+
+  function setupTransitionCb (event, cleanupFn) {
+    data.event = event
+    var onEnd = data.callback = function transitionCb (e) {
+      if (e.target === el) {
+        _.off(el, event, onEnd)
+        data.event = data.callback = null
+        if (cleanupFn) cleanupFn()
+        if (cb) cb()
+      }
+    }
+    _.on(el, event, onEnd)
+  }
 }
 
 /**
@@ -7637,89 +7750,16 @@ module.exports = function (el, direction, op, data, cb) {
     classList.remove(leaveClass)
     data.event = data.callback = null
   }
-  var transitionType, onEnd, endEvent
   if (direction > 0) { // enter
-    // Enter Transition
     classList.add(enterClass)
     op()
-    transitionType = getTransitionType(el, data, enterClass)
-    if (transitionType === 1) {
-      batcher.push({
-        run: function () {
-          classList.remove(enterClass)
-        }
-      })
-      // only listen for transition end if user has sent
-      // in a callback
-      if (cb) {
-        endEvent = data.event = _.transitionEndEvent
-        onEnd = data.callback = function transitionCb (e) {
-          if (e.target === el) {
-            _.off(el, endEvent, onEnd)
-            data.event = data.callback = null
-            cb()
-          }
-        }
-        _.on(el, endEvent, onEnd)
-      }
-    } else if (transitionType === 2) {
-      // Enter Animation
-      //
-      // Animations are triggered automatically as the
-      // element is inserted into the DOM, so we just
-      // listen for the animationend event.
-      endEvent = data.event = _.animationEndEvent
-      onEnd = data.callback = function transitionCb (e) {
-        if (e.target === el) {
-          _.off(el, endEvent, onEnd)
-          data.event = data.callback = null
-          classList.remove(enterClass)
-          if (cb) cb()
-        }
-      }
-      _.on(el, endEvent, onEnd)
-    } else {
-      // no transition applicable
-      classList.remove(enterClass)
-      if (cb) cb()
-    }
-
+    push(el, direction, null, enterClass, cb)
   } else { // leave
-
     classList.add(leaveClass)
-    transitionType = getTransitionType(el, data, leaveClass)
-    if (transitionType) {
-      if (transitionType === 1) {
-        classList.remove(leaveClass)
-        batcher.push({
-          run: function () {
-            classList.add(leaveClass)
-          }
-        })
-      }
-      endEvent = data.event = transitionType === 1
-        ? _.transitionEndEvent
-        : _.animationEndEvent
-      onEnd = data.callback = function transitionCb (e) {
-        if (e.target === el) {
-          _.off(el, endEvent, onEnd)
-          data.event = data.callback = null
-          // actually remove node here
-          op()
-          classList.remove(leaveClass)
-          if (cb) cb()
-        }
-      }
-      _.on(el, endEvent, onEnd)
-    } else {
-      op()
-      classList.remove(leaveClass)
-      if (cb) cb()
-    }
-
+    push(el, direction, op, leaveClass, cb)
   }
 }
-},{"../batcher":12,"../util":62}],56:[function(require,module,exports){
+},{"../util":62}],56:[function(require,module,exports){
 var _ = require('../util')
 var applyCSSTransition = require('./css')
 var applyJSTransition = require('./js')
@@ -8475,7 +8515,7 @@ strats.data = function (parentVal, childVal, vm) {
     // mix default data into instance data
     for (var key in defaultData) {
       if (!instanceData.hasOwnProperty(key)) {
-        instanceData[key] = defaultData[key]
+        instanceData.$add(key, defaultData[key])
       }
     }
     return instanceData
