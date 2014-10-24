@@ -1960,10 +1960,12 @@ exports.$addChild = function (opts, BaseCtor) {
     }
     ChildVue = ctors[BaseCtor.cid]
     if (!ChildVue) {
-      ChildVue = function (options) {
-        this.constructor = ChildVue
-        _.Vue.call(this, options)
-      }
+      var className = BaseCtor.name || 'VueComponent'
+      ChildVue = new Function(
+        'return function ' + className + ' (options) {' +
+        'this.constructor = ' + className + ';' +
+        'this._init(options) }'
+      )()
       ChildVue.options = BaseCtor.options
       ChildVue.prototype = this
       ctors[BaseCtor.cid] = ChildVue
@@ -2581,10 +2583,9 @@ exports.extend = function (extendOptions) {
 
 function createClass (name) {
   return new Function(
-    'Vue',
     'return function ' + _.camelize(name) +
-    ' (options) { Vue.call(this, options) }'
-  )(_.Vue)
+    ' (options) { this._init(options) }'
+  )()
 }
 
 /**
@@ -2660,6 +2661,7 @@ function createAssetRegisters (Constructor) {
 createAssetRegisters(exports)
 },{"../config":17,"../util":62,"../util/merge-option":64}],11:[function(require,module,exports){
 var _ = require('../util')
+var compile = require('../compile/compile')
 
 /**
  * Set instance target element and kick off the compilation
@@ -2734,7 +2736,7 @@ exports.$destroy = function (remove) {
   var parent = this.$parent
   if (parent && !parent._isBeingDestroyed) {
     i = parent._children.indexOf(this)
-    parent._children.splice(i)
+    parent._children.splice(i, 1)
   }
   // destroy all children.
   if (this._children) {
@@ -2775,7 +2777,19 @@ exports.$destroy = function (remove) {
   // turn off all instance listeners.
   this.$off()
 }
-},{"../util":62}],12:[function(require,module,exports){
+
+/**
+ * Partially compile a piece of DOM and return a
+ * decompile function.
+ *
+ * @param {Element|DocumentFragment} el
+ * @return {Function}
+ */
+
+exports.$compile = function (el) {
+  return compile(el, this.$options, true)(this, el)
+}
+},{"../compile/compile":15,"../util":62}],12:[function(require,module,exports){
 var _ = require('./util')
 
 /**
@@ -3017,8 +3031,6 @@ var textParser = require('../parse/text')
 var dirParser = require('../parse/directive')
 var templateParser = require('../parse/template')
 
-function noop () {}
-
 /**
  * Compile a template and return a reusable composite link
  * function, which recursively contains more link functions
@@ -3044,10 +3056,41 @@ module.exports = function compile (el, options, partial) {
     el.hasChildNodes()
       ? compileNodeList(el.childNodes, options)
       : null
+
+  /**
+   * A linker function to be called on a already compiled
+   * piece of DOM, which instantiates all directive
+   * instances.
+   *
+   * @param {Vue} vm
+   * @param {Element|DocumentFragment} el
+   * @return {Function|undefined}
+   */
+
   return function link (vm, el) {
+    var originalDirCount = vm._directives.length
     if (paramsLinkFn) paramsLinkFn(vm, el)
     if (nodeLinkFn) nodeLinkFn(vm, el)
     if (childLinkFn) childLinkFn(vm, el.childNodes)
+
+    /**
+     * If this is a partial compile, the linker function
+     * returns an unlink function that tearsdown all
+     * directives instances generated during the partial
+     * linking.
+     */
+
+    if (partial) {
+      var dirs = vm._directives.slice(originalDirCount)
+      return function unlink () {
+        var i = dirs.length
+        while (i--) {
+          dirs[i]._teardown()
+        }
+        i = vm._directives.indexOf(dirs[0])
+        vm._directives.splice(i, dirs.length)
+      }
+    }
   }
 }
 
@@ -3124,15 +3167,15 @@ function makeDirectivesLinkFn (directives) {
   return function directivesLinkFn (vm, el) {
     // reverse apply because it's sorted low to high
     var i = directives.length
-    var dir, j
+    var dir, j, k
     while (i--) {
       dir = directives[i]
       if (dir._link) {
         // custom link fn
         dir._link(vm, el)
       } else {
-        j = dir.descriptors.length
-        while (j--) {
+        k = dir.descriptors.length
+        for (j = 0; j < k; j++) {
           vm._bindDir(dir.name, el,
                       dir.descriptors[j], dir.def)
         }
@@ -3365,13 +3408,16 @@ function makeParamsLinkFn (params, options) {
 
 var terminalDirectives = [
   'repeat',
-  'component',
-  'if'
+  'if',
+  'component'
 ]
+
+function skip () {}
+skip.terminal = true
 
 function checkTerminalDirectives (el, options) {
   if (_.attr(el, 'pre') !== null) {
-    return noop
+    return skip
   }
   var value, dirName
   /* jshint boss: true */
@@ -3396,6 +3442,16 @@ function checkTerminalDirectives (el, options) {
 function makeTeriminalLinkFn (el, dirName, value, options) {
   var descriptor = dirParser.parse(value)[0]
   var def = options.directives[dirName]
+  // special case: we need to collect directives found
+  // on a component root node, but defined in the parent
+  // template. These directives need to be compiled in
+  // the parent scope.
+  if (dirName === 'component') {
+    var dirs = collectDirectives(el, options, true)
+    el._parentLinker = dirs.length
+      ? makeDirectivesLinkFn(dirs)
+      : null
+  }
   var terminalLinkFn = function (vm, el) {
     vm._bindDir(dirName, el, descriptor, def)
   }
@@ -3408,10 +3464,11 @@ function makeTeriminalLinkFn (el, dirName, value, options) {
  *
  * @param {Element} el
  * @param {Object} options
+ * @param {Boolean} asParent
  * @return {Array}
  */
 
-function collectDirectives (el, options) {
+function collectDirectives (el, options, asParent) {
   var attrs = _.toArray(el.attributes)
   var i = attrs.length
   var dirs = []
@@ -3421,12 +3478,15 @@ function collectDirectives (el, options) {
     attrName = attr.name
     if (attrName.indexOf(config.prefix) === 0) {
       dirName = attrName.slice(config.prefix.length)
+      if (
+        asParent &&
+        (dirName === 'with' || dirName === 'ref')
+      ) {
+        continue
+      }
       dirDef = options.directives[dirName]
       _.assertAsset(dirDef, 'directive', dirName)
       if (dirDef) {
-        if (dirName !== 'cloak') {
-          el.removeAttribute(attrName)
-        }
         dirs.push({
           name: dirName,
           descriptors: dirParser.parse(attr.value),
@@ -3518,11 +3578,14 @@ module.exports = function transclude (el, options) {
   if (el.tagName === 'TEMPLATE') {
     el = templateParser.parse(el)
   }
-  if (options.template) {
-    return transcludeTemplate(el, options)
-  } else {
-    return el
+  if (options && options.template) {
+    el = transcludeTemplate(el, options)
   }
+  if (el instanceof DocumentFragment) {
+    _.prepend(document.createComment('v-start'), el)
+    el.appendChild(document.createComment('v-end'))
+  }
+  return el
 }
 
 /**
@@ -3700,6 +3763,12 @@ module.exports = {
   interpolate: true,
 
   /**
+   * Whether to use async rendering.
+   */
+
+  async: true,
+
+  /**
    * Internal flag to indicate the delimiters have been
    * changed.
    *
@@ -3730,6 +3799,7 @@ Object.defineProperty(module.exports, 'delimiters', {
 })
 },{}],18:[function(require,module,exports){
 var _ = require('./util')
+var config = require('./config')
 var Watcher = require('./watcher')
 var textParser = require('./parse/text')
 var expParser = require('./parse/expression')
@@ -3781,6 +3851,9 @@ var p = Directive.prototype
  */
 
 p._bind = function (def) {
+  if (this.name !== 'cloak' && this.el.removeAttribute) {
+    this.el.removeAttribute(config.prefix + this.name)
+  }
   if (typeof def === 'function') {
     this.update = def
   } else {
@@ -3794,7 +3867,7 @@ p._bind = function (def) {
   if (
     this.update && this._watcherExp &&
     (!this.isLiteral || this._isDynamicLiteral) &&
-    !this._checkExpFn()
+    !this._checkStatement()
   ) {
     // use raw expression as identifier because filters
     // make them different watchers
@@ -3818,7 +3891,11 @@ p._bind = function (def) {
       watcher.addCb(update)
     }
     this._watcher = watcher
-    this.update(watcher.value)
+    if (this._initValue != null) {
+      watcher.set(this._initValue)
+    } else {
+      this.update(watcher.value)
+    }
   }
   this._bound = true
 }
@@ -3853,10 +3930,10 @@ p._checkDynamicLiteral = function () {
  * @return {Boolean}
  */
 
-p._checkExpFn = function () {
+p._checkStatement = function () {
   var expression = this.expression
   if (
-    expression && this.isFn &&
+    expression && this.acceptStatement &&
     !expParser.pathTestRE.test(expression)
   ) {
     var fn = expParser.parse(expression).get
@@ -3889,7 +3966,7 @@ p._teardown = function () {
     if (watcher && watcher.active) {
       watcher.removeCb(this._update)
       if (!watcher.active) {
-        this.vm._watchers[this.expression] = null
+        this.vm._watchers[this.raw] = null
       }
     }
     this._bound = false
@@ -3923,7 +4000,7 @@ p.set = function (value, lock) {
 }
 
 module.exports = Directive
-},{"./parse/expression":51,"./parse/text":54,"./util":62,"./watcher":66}],19:[function(require,module,exports){
+},{"./config":17,"./parse/expression":51,"./parse/text":54,"./util":62,"./watcher":66}],19:[function(require,module,exports){
 // xlink
 var xlinkNS = 'http://www.w3.org/1999/xlink'
 var xlinkRE = /^xlink:/
@@ -4017,26 +4094,20 @@ module.exports = {
 }
 },{"../config":17}],22:[function(require,module,exports){
 var _ = require('../util')
-var Watcher = require('../watcher')
+var templateParser = require('../parse/template')
 
 module.exports = {
 
   isLiteral: true,
 
   /**
-   * Setup. Need to check a few possible permutations:
+   * Setup. Two possible usages:
    *
-   * - literal:
+   * - static:
    *   v-component="comp"
    *
    * - dynamic:
    *   v-component="{{currentView}}"
-   *
-   * - conditional:
-   *   v-component="comp" v-if="abc"
-   *
-   * - dynamic + conditional:
-   *   v-component="{{currentView}}" v-if="abc"
    */
 
   bind: function () {
@@ -4044,10 +4115,10 @@ module.exports = {
       // create a ref anchor
       this.ref = document.createComment('v-component')
       _.replace(this.el, this.ref)
-      // check v-if conditionals
-      this.checkIf()
       // check keep-alive options
       this.checkKeepAlive()
+      // check parent directives
+      this.parentLinker = this.el._parentLinker
       // if static, build right now.
       if (!this._isDynamicLiteral) {
         this.resolveCtor(this.expression)
@@ -4058,46 +4129,6 @@ module.exports = {
         'v-component="' + this.expression + '" cannot be ' +
         'used on an already mounted instance.'
       )
-    }
-  },
-
-  /**
-   * Check if v-component is being used together with v-if.
-   * If yes, we created a watcher for the v-if value and
-   * react to its value change in `this.ifCallback`.
-   */
-
-  checkIf: function () {
-    var condition = _.attr(this.el, 'if')
-    if (condition !== null) {
-      var self = this
-      this.ifWatcher = new Watcher(
-        this.vm,
-        condition,
-        function (value) {
-          self.toggleIf(value)
-        }
-      )
-      this.active = this.ifWatcher.value
-    } else {
-      this.active = true
-    }
-  },
-
-  /**
-   * Callback when v-if value changes.
-   * Marks the active flag.
-   *
-   * @param {*} value
-   */
-
-  toggleIf: function (value) {
-    if (value) {
-      this.active = true
-      this.build()
-    } else {
-      this.active = false
-      this.unbuild(true)
     }
   },
 
@@ -4136,21 +4167,27 @@ module.exports = {
    */
 
   build: function () {
-    if (!this.active) {
-      return
-    }
     if (this.keepAlive) {
-      var vm = this.cache[this.ctorId]
-      if (vm) {
-        this.childVM = vm
-        vm.$before(this.ref)
+      var cached = this.cache[this.ctorId]
+      if (cached) {
+        this.childVM = cached
+        cached.$before(this.ref)
         return
       }
     }
+    var vm = this.vm
     if (this.Ctor && !this.childVM) {
-      this.childVM = this.vm.$addChild({
-        el: this.el.cloneNode(true)
+      this.childVM = vm.$addChild({
+        el: templateParser.clone(this.el)
       }, this.Ctor)
+      if (this.parentLinker) {
+        var dirCount = vm._directives.length
+        var targetVM = this.childVM.$options.inherit
+          ? this.childVM
+          : vm
+        this.parentLinker(targetVM, this.childVM.$el)
+        this.parentDirs = vm._directives.slice(dirCount)
+      }
       if (this.keepAlive) {
         this.cache[this.ctorId] = this.childVM
       }
@@ -4175,6 +4212,12 @@ module.exports = {
       }
     } else {
       this.childVM.$destroy(remove)
+      if (this.parentDirs) {
+        var i = this.parentDirs.length
+        while (i--) {
+          this.parentDirs[i]._teardown()
+        }
+      }
     }
     this.childVM = null
   },
@@ -4195,30 +4238,26 @@ module.exports = {
   /**
    * Unbind.
    * Make sure keepAlive is set to false so that the
-   * instance is always destroyed. Teardown v-if watcher
-   * if present.
+   * instance is always destroyed.
    */
 
   unbind: function () {
     this.keepAlive = false
     this.unbuild()
-    if (this.ifWatcher) {
-      this.ifWatcher.teardown()
-    }
   }
 
 }
-},{"../util":62,"../watcher":66}],23:[function(require,module,exports){
+},{"../parse/template":53,"../util":62}],23:[function(require,module,exports){
 module.exports = {
 
   isLiteral: true,
 
   bind: function () {
-    this.vm._owner.$$[this.expression] = this.el
+    this.vm.$$[this.expression] = this.el
   },
 
   unbind: function () {
-    this.vm._owner.$$[this.expression] = null
+    delete this.vm.$$[this.expression]
   }
   
 }
@@ -4262,19 +4301,31 @@ module.exports = {
 }
 },{"../parse/template":53,"../util":62}],25:[function(require,module,exports){
 var _ = require('../util')
+var compile = require('../compile/compile')
 var templateParser = require('../parse/template')
+var transition = require('../transition')
 
 module.exports = {
 
   bind: function () {
     var el = this.el
     if (!el.__vue__) {
-      this.ref = document.createComment('v-if')
-      _.replace(el, this.ref)
-      this.inserted = false
+      this.start = document.createComment('v-if-start')
+      this.end = document.createComment('v-if-end')
+      _.replace(el, this.end)
+      _.before(this.start, this.end)
       if (el.tagName === 'TEMPLATE') {
-        this.el = templateParser.parse(el, true)
+        this.template = templateParser.parse(el, true)
+      } else {
+        this.template = document.createDocumentFragment()
+        this.template.appendChild(el)
       }
+      // compile the nested partial
+      this.linker = compile(
+        this.template,
+        this.vm.$options,
+        true
+      )
     } else {
       this.invalid = true
       _.warn(
@@ -4287,33 +4338,32 @@ module.exports = {
   update: function (value) {
     if (this.invalid) return
     if (value) {
-      if (!this.inserted) {
-        if (!this.childVM) {
-          this.childVM = this.vm.$addChild({
-            el: this.el,
-            inherit: true,
-            _anonymous: true
-          })
-        }
-        this.childVM.$before(this.ref)
-        this.inserted = true
-      }
+      this.insert()
     } else {
-      if (this.inserted) {
-        this.childVM.$remove()
-        this.inserted = false
-      }
+      this.teardown()
     }
   },
 
-  unbind: function () {
-    if (this.childVM) {
-      this.childVM.$destroy()
+  insert: function () {
+    var vm = this.vm
+    var frag = templateParser.clone(this.template)
+    var decompile = this.linker(vm, frag)
+    this.decompile = function () {
+      decompile()
+      transition.blockRemove(this.start, this.end, vm)
+    }
+    transition.blockAppend(frag, this.end, vm)
+  },
+
+  teardown: function () {
+    if (this.decompile) {
+      this.decompile()
+      this.decompile = null
     }
   }
 
 }
-},{"../parse/template":53,"../util":62}],26:[function(require,module,exports){
+},{"../compile/compile":15,"../parse/template":53,"../transition":56,"../util":62}],26:[function(require,module,exports){
 // manipulation directives
 exports.text       = require('./text')
 exports.html       = require('./html')
@@ -4349,8 +4399,7 @@ module.exports = {
     }
     _.on(el, 'change', this.listener)
     if (el.checked) {
-      // watcher is not set up yet
-      this.vm.$set(this.expression, el.checked)
+      this._initValue = el.checked
     }
   },
 
@@ -4424,8 +4473,7 @@ module.exports = {
     }
     _.on(el, 'change', this.listener)
     if (el.checked) {
-      // watcher is not set up yet
-      this.vm.$set(this.expression, el.value)
+      this._initValue = el.value
     }
   },
 
@@ -4476,7 +4524,7 @@ module.exports = {
     while (i--) {
       option = options[i]
       option.selected = multi
-        ? value.indexOf(option.value) > -1
+        ? indexOf(value, option.value) > -1
         : value == option.value
     }
   },
@@ -4566,7 +4614,7 @@ function checkInitialValue () {
     }
   }
   if (initValue) {
-    this.vm.$set(this.expression, initValue)
+    this._initValue = initValue
   }
 }
 
@@ -4589,6 +4637,23 @@ function filterSelected (op) {
 
 function getOptionValue (op) {
   return op.value || op.text
+}
+
+/**
+ * Native Array.indexOf uses strict equal, but in this
+ * case we need to match string/numbers with soft equal.
+ *
+ * @param {Array} arr
+ * @param {*} val
+ */
+
+function indexOf (arr, val) {
+  /* jshint eqeqeq: false */
+  var i = arr.length
+  while (i--) {
+    if (arr[i] == val) return i
+  }
+  return -1
 }
 },{"../../util":62,"../../watcher":66}],31:[function(require,module,exports){
 var _ = require('../../util')
@@ -4640,30 +4705,29 @@ module.exports = {
     // if the directive has filters, we need to
     // record cursor position and restore it after updating
     // the input with the filtered value.
-    if (this.filters) {
-      this.listener = function textInputListener () {
-        if (cpLocked) return
-        var cursorPos
-        // some HTML5 input types throw error here
-        try { cursorPos = el.selectionStart } catch (e) {}
-        set()
-        // force a value update, because in
-        // certain cases the write filters output the same
-        // result for different input values, and the Observer
-        // set events won't be triggered.
-        _.nextTick(function () {
-          var newVal = self._watcher.value
-          self.update(newVal)
-          if (cursorPos != null) {
-            el.setSelectionRange(cursorPos, cursorPos)
-          }
-        })
-      }
-    } else {
-      this.listener = function textInputListener () {
-        if (cpLocked) return
-        set()
-      }
+    this.listener = function textInputListener () {
+      if (cpLocked) return
+      var charsOffset
+      // some HTML5 input types throw error here
+      try {
+        // record how many chars from the end of input
+        // the cursor was at
+        charsOffset = el.value.length - el.selectionStart
+      } catch (e) {}
+      set()
+      // force a value update, because in
+      // certain cases the write filters output the same
+      // result for different input values, and the Observer
+      // set events won't be triggered.
+      _.nextTick(function () {
+        var newVal = self._watcher.value
+        self.update(newVal)
+        if (charsOffset != null) {
+          var cursorPos =
+            _.toString(newVal).length - charsOffset
+          el.setSelectionRange(cursorPos, cursorPos)
+        }
+      })
     }
     this.event = lazy ? 'change' : 'input'
     _.on(el, this.event, this.listener)
@@ -4687,8 +4751,7 @@ module.exports = {
       el.hasAttribute('value') ||
       (el.tagName === 'TEXTAREA' && el.value.trim())
     ) {
-      // watcher is not set up yet
-      this.vm.$set(this.expression, el.value)
+      this._initValue = el.value
     }
   },
 
@@ -4713,7 +4776,7 @@ var _ = require('../util')
 
 module.exports = {
 
-  isFn: true,
+  acceptStatement: true,
   priority: 700,
 
   bind: function () {
@@ -4740,12 +4803,11 @@ module.exports = {
     }
     this.reset()
     var vm = this.vm
-    var root = vm.$root
     this.handler = function (e) {
       e.targetVM = vm
-      root.$event = e
+      vm.$event = e
       var res = handler(e)
-      root.$event = null
+      vm.$event = null
       return res
     }
     if (this.iframeBind) {
@@ -4771,37 +4833,61 @@ module.exports = {
 }
 },{"../util":62}],33:[function(require,module,exports){
 var _ = require('../util')
-var compile = require('../compile/compile')
 var templateParser = require('../parse/template')
+var transition = require('../transition')
 
 module.exports = {
 
   isLiteral: true,
 
   bind: function () {
-    var id = this.expression
+    var el = this.el
+    this.start = document.createComment('v-partial-start')
+    this.end = document.createComment('v-partial-end')
+    if (el.nodeType !== 8) {
+      el.innerHTML = ''
+    }
+    if (el.tagName === 'TEMPLATE' || el.nodeType === 8) {
+      _.replace(el, this.end)
+    } else {
+      el.appendChild(this.end)
+    }
+    _.before(this.start, this.end)
+    if (!this._isDynamicLiteral) {
+      this.compile(this.expression)
+    }
+  },
+
+  update: function (id) {
+    this.teardown()
+    this.compile(id)
+  },
+
+  compile: function (id) {
     var partial = this.vm.$options.partials[id]
     _.assertAsset(partial, 'partial', id)
     if (!partial) {
       return
     }
-    partial = templateParser.parse(partial, true)
-    var el = this.el
     var vm = this.vm
-    if (el.nodeType === 8) {
-      // comment ref node means inline partial
-      compile(partial, vm.$options)(vm, partial)
-      _.replace(el, partial)
-    } else {
-      // just set innerHTML...
-      el.innerHTML = ''
-      el.appendChild(partial)
-      compile(el, vm.$options, true)(vm, el)
+    var frag = templateParser.parse(partial, true)
+    var decompile = vm.$compile(frag)
+    this.decompile = function () {
+      decompile()
+      transition.blockRemove(this.start, this.end, vm)
+    }
+    transition.blockAppend(frag, this.end, vm)
+  },
+
+  teardown: function () {
+    if (this.decompile) {
+      this.decompile()
+      this.decompile = null
     }
   }
 
 }
-},{"../compile/compile":15,"../parse/template":53,"../util":62}],34:[function(require,module,exports){
+},{"../parse/template":53,"../transition":56,"../util":62}],34:[function(require,module,exports){
 var _ = require('../util')
 
 module.exports = {
@@ -4815,11 +4901,12 @@ module.exports = {
       )
       return
     }
-    this.vm._owner.$[this.expression] = this.vm
+    this.owner = this.vm.$parent
+    this.owner.$[this.expression] = this.vm
   },
 
   unbind: function () {
-    this.vm._owner.$[this.expression] = null
+    delete this.owner.$[this.expression]
   }
   
 }
@@ -4848,10 +4935,12 @@ module.exports = {
     if (!this.filters) {
       this.filters = {}
     }
+    // add the object -> array convert filter
+    var objectConverter = _.bind(objToArray, this)
     if (!this.filters.read) {
-      this.filters.read = [objToArray]
+      this.filters.read = [objectConverter]
     } else {
-      this.filters.read.unshift(objToArray)
+      this.filters.read.unshift(objectConverter)
     }
     // setup ref node
     this.ref = document.createComment('v-repeat')
@@ -4888,7 +4977,6 @@ module.exports = {
    */
 
   checkRef: function () {
-    this.owner = this.vm._owner
     var childId = _.attr(this.el, 'ref')
     this.childId = childId
       ? this.vm.$interpolate(childId)
@@ -4920,14 +5008,18 @@ module.exports = {
 
   checkComponent: function () {
     var id = _.attr(this.el, 'component')
+    var options = this.vm.$options
     if (!id) {
       this.Ctor = _.Vue // default constructor
       this.inherit = true // inline repeats should inherit
-      this._linker = compile(this.template, this.vm.$options)
+      // important: transclude with no options, just
+      // to ensure block start and block end
+      this.template = transclude(this.template)
+      this._linker = compile(this.template, options)
     } else {
       var tokens = textParser.parse(id)
       if (!tokens) { // static component
-        var Ctor = this.Ctor = this.vm.$options.components[id]
+        var Ctor = this.Ctor = options.components[id]
         _.assertAsset(Ctor, 'component', id)
         if (Ctor) {
           // merge an empty object with owner vm as parent
@@ -4959,14 +5051,13 @@ module.exports = {
     if (typeof data === 'number') {
       data = range(data)
     }
-    this.converted = data && data._converted
     this.vms = this.diff(data || [], this.vms)
     // update v-ref
     if (this.childId) {
-      this.owner.$[this.childId] = this.vms
+      this.vm.$[this.childId] = this.vms
     }
     if (this.elId) {
-      this.owner.$$[this.elId] = this.vms.map(function (vm) {
+      this.vm.$$[this.elId] = this.vms.map(function (vm) {
         return vm.$el
       })
     }
@@ -5105,7 +5196,7 @@ module.exports = {
     // resolve constructor
     var Ctor = this.Ctor || this.resolveCtor(data, meta)
     var vm = this.vm.$addChild({
-      el: this.template.cloneNode(true),
+      el: templateParser.clone(this.template),
       _linker: this._linker,
       _meta: meta,
       data: data,
@@ -5151,7 +5242,7 @@ module.exports = {
 
   unbind: function () {
     if (this.childId) {
-      delete this.owner.$[this.childId]
+      delete this.vm.$[this.childId]
     }
     if (this.vms) {
       var i = this.vms.length
@@ -5283,6 +5374,10 @@ function findNextVm (vm, ref) {
  * This is the default filter installed to every v-repeat
  * directive.
  *
+ * It will be called with **the directive** as `this`
+ * context so that we can mark the repeat array as converted
+ * from an object.
+ *
  * @param {*} obj
  * @return {Array}
  * @private
@@ -5303,7 +5398,8 @@ function objToArray (obj) {
       value: obj[key]
     }
   }
-  res._converted = true
+  // `this` points to the repeat directive instance
+  this.converted = true
   return res
 }
 
@@ -5741,51 +5837,63 @@ var _ = require('../util')
 var inDoc = _.inDoc
 
 /**
- * Setup the instance's option events.
+ * Setup the instance's option events & watchers.
  * If the value is a string, we pull it from the
  * instance's methods by name.
  */
 
 exports._initEvents = function () {
   var options = this.$options
-  var events = options.events
-  var methods = options.methods
-  if (events) {
-    var handlers, e, i, j
-    for (e in events) {
-      handlers = events[e]
-      if (_.isArray(handlers)) {
-        for (i = 0, j = handlers.length; i < j; i++) {
-          register(this, e, handlers[i], methods)
-        }
-      } else {
-        register(this, e, handlers, methods)
+  registerCallbacks(this, '$on', options.events)
+  registerCallbacks(this, '$watch', options.watch)
+}
+
+/**
+ * Register callbacks for option events and watchers.
+ *
+ * @param {Vue} vm
+ * @param {String} action
+ * @param {Object} hash
+ */
+
+function registerCallbacks (vm, action, hash) {
+  if (!hash) return
+  var handlers, key, i, j
+  for (key in hash) {
+    handlers = hash[key]
+    if (_.isArray(handlers)) {
+      for (i = 0, j = handlers.length; i < j; i++) {
+        register(vm, action, key, handlers[i])
       }
+    } else {
+      register(vm, action, key, handlers)
     }
   }
 }
 
 /**
- * Helper to register an event.
+ * Helper to register an event/watch callback.
  *
  * @param {Vue} vm
- * @param {String} event
+ * @param {String} action
+ * @param {String} key
  * @param {*} handler
- * @param {Object|undefined} methods
  */
 
-function register (vm, event, handler, methods) {
+function register (vm, action, key, handler) {
   var type = typeof handler
   if (type === 'function') {
-    vm.$on(event, handler)
+    vm[action](key, handler)
   } else if (type === 'string') {
+    var methods = vm.$options.methods
     var method = methods && methods[handler]
     if (method) {
-      vm.$on(event, method)
+      vm[action](key, method)
     } else {
       _.warn(
         'Unknown method: "' + handler + '" when ' +
-        'registering callback for event: "' + event + '".'
+        'registering callback for ' + action +
+        ': "' + key + '".'
       )
     }
   }
@@ -5900,16 +6008,6 @@ exports._init = function (options) {
   this._childCtors = null  // @type {Object} - hash to cache
                            // child constructors
 
-  // anonymous instances are created by v-if
-  // we need to walk along the parent chain to locate the
-  // first non-anonymous instance as the owner.
-  this._isAnonymous = options._anonymous
-  var parent = this.$parent
-  while (parent && parent._isAnonymous) {
-    parent = parent.$parent
-  }
-  this._owner = parent || this
-
   // merge options.
   options = this.$options = mergeOptions(
     this.constructor.options,
@@ -5920,11 +6018,11 @@ exports._init = function (options) {
   // set data after merge.
   this._data = options.data || {}
 
-  // setup event system and option events.
-  this._initEvents()
-
   // initialize data observation and scope inheritance.
   this._initScope()
+
+  // setup event system and option events.
+  this._initEvents()
 
   // call created hook
   this._callHook('created')
@@ -5981,6 +6079,7 @@ exports._initData = function () {
  */
 
 exports._setData = function (newData) {
+  newData = newData || {}
   var oldData = this._data
   this._data = newData
   var keys, key, i
@@ -6868,10 +6967,7 @@ function compilePathFns (exp) {
 
 function makeGetter (body) {
   try {
-    return new Function(
-      'scope',
-      '"use strict";try{return ' + body + '}catch(e){};'
-    )
+    return new Function('scope', 'return ' + body + ';')
   } catch (e) {
     _.warn(
       'Invalid expression. ' + 
@@ -6896,11 +6992,7 @@ function makeGetter (body) {
 
 function makeSetter (body) {
   try {
-    return new Function(
-      'scope',
-      'value',
-      '"use strict";' + body + ' = value;'
-    )
+    return new Function('scope', 'value', body + '=value;')
   } catch (e) {
     _.warn('Invalid setter function body: ' + body)
   }
@@ -7253,6 +7345,17 @@ exports.set = function (obj, path, val) {
 var Cache = require('../cache')
 var templateCache = new Cache(100)
 
+/**
+ * Test for the presence of the Safari template cloning bug
+ * https://bugs.webkit.org/show_bug.cgi?id=137755
+ */
+
+var hasBrokenTemplate = (function () {
+  var a = document.createElement('div')
+  a.innerHTML = '<template>1</template>'
+  return !a.cloneNode(true).firstChild.innerHTML
+})()
+
 var map = {
   _default : [0, '', ''],
   legend   : [1, '<fieldset>', '</fieldset>'],
@@ -7380,6 +7483,33 @@ function nodeToFragment (node) {
 }
 
 /**
+ * Deal with Safari cloning nested <template> bug by
+ * manually cloning all template instances.
+ *
+ * @param {Element|DocumentFragment} node
+ * @return {Element|DocumentFragment}
+ */
+
+exports.clone = function (node) {
+  var res = node.cloneNode(true)
+  /* istanbul ignore if */
+  if (hasBrokenTemplate) {
+    var templates = node.querySelectorAll('template')
+    if (templates.length) {
+      var cloned = res.querySelectorAll('template')
+      var i = cloned.length
+      while (i--) {
+        cloned[i].parentNode.replaceChild(
+          templates[i].cloneNode(true),
+          cloned[i]
+        )
+      }
+    }
+  }
+  return res
+}
+
+/**
  * Process the template option and normalizes it into a
  * a DocumentFragment that can be used as a partial or a
  * instance template.
@@ -7428,7 +7558,7 @@ exports.parse = function (template, clone) {
   }
 
   return frag && clone
-    ? frag.cloneNode(true)
+    ? exports.clone(frag)
     : frag
 }
 },{"../cache":14}],54:[function(require,module,exports){
@@ -7566,7 +7696,7 @@ function formatToken (token, vm) {
   return token.tag
     ? vm && token.oneTime
       ? '"' + vm.$get(token.value) + '"'
-      : token.value
+      : '(' + token.value + ')'
     : '"' + token.value + '"'
 }
 },{"../cache":14,"../config":17}],55:[function(require,module,exports){
@@ -7822,6 +7952,39 @@ exports.removeThenAppend = function (el, target, vm, cb) {
   apply(el, -1, function () {
     target.appendChild(el)
   }, vm, cb)
+}
+
+/**
+ * Append the childNodes of a fragment to target.
+ *
+ * @param {DocumentFragment} block
+ * @param {Node} target
+ * @param {Vue} vm
+ */
+
+exports.blockAppend = function (block, target, vm) {
+  var nodes = _.toArray(block.childNodes)
+  for (var i = 0, l = nodes.length; i < l; i++) {
+    exports.before(nodes[i], target, vm)
+  }
+}
+
+/**
+ * Remove a block of nodes between two edge nodes.
+ *
+ * @param {Node} start
+ * @param {Node} end
+ * @param {Vue} vm
+ */
+
+exports.blockRemove = function (start, end, vm) {
+  var node = start.nextSibling
+  var next
+  while (node !== end) {
+    next = node.nextSibling
+    exports.remove(node, vm)
+    node = next
+  }
 }
 
 /**
@@ -8485,7 +8648,7 @@ var extend = _.extend
  * @param {Vue} [vm]
  */
 
-var strats = {}
+var strats = Object.create(null)
 
 /**
  * Data
@@ -8506,10 +8669,10 @@ strats.data = function (parentVal, childVal, vm) {
     return childVal || parentVal
   }
   var instanceData = typeof childVal === 'function'
-    ? childVal()
+    ? childVal.call(vm)
     : childVal
   var defaultData = typeof parentVal === 'function'
-    ? parentVal()
+    ? parentVal.call(vm)
     : undefined
   if (instanceData) {
     // mix default data into instance data
@@ -8540,7 +8703,7 @@ strats.el = function (parentVal, childVal, vm) {
   var ret = childVal || parentVal
   // invoke the element factory if this is instance merge
   return vm && typeof ret === 'function'
-    ? ret()
+    ? ret.call(vm)
     : ret
 }
 
@@ -8598,12 +8761,13 @@ strats.components = function (parentVal, childVal, vm, key) {
 }
 
 /**
- * Events
+ * Events & Watchers.
  *
- * Events should not overwrite one another, so we merge
- * them as arrays.
+ * Events & watchers hashes should not overwrite one
+ * another, so we merge them as arrays.
  */
 
+strats.watch =
 strats.events = function (parentVal, childVal) {
   if (!childVal) return parentVal
   if (!parentVal) return childVal
@@ -8785,6 +8949,7 @@ extend(p, require('./api/lifecycle'))
 module.exports = _.Vue = Vue
 },{"./api/child":6,"./api/data":7,"./api/dom":8,"./api/events":9,"./api/global":10,"./api/lifecycle":11,"./directives":26,"./filters":42,"./instance/compile":43,"./instance/events":44,"./instance/init":45,"./instance/scope":46,"./util":62}],66:[function(require,module,exports){
 var _ = require('./util')
+var config = require('./config')
 var Observer = require('./observer')
 var expParser = require('./parse/expression')
 var Batcher = require('./batcher')
@@ -8854,7 +9019,10 @@ p.addDep = function (binding) {
 p.get = function () {
   this.beforeGet()
   var vm = this.vm
-  var value = this.getter.call(vm, vm)
+  var value
+  try {
+    value = this.getter.call(vm, vm)
+  } catch (e) {}
   // use JSON.stringify to "touch" every property
   // so they are all tracked as dependencies for
   // deep watching
@@ -8875,7 +9043,9 @@ p.set = function (value) {
   value = _.applyFilters(
     value, this.writeFilters, vm, this.value
   )
-  this.setter.call(vm, vm, value)
+  try {
+    this.setter.call(vm, vm, value)
+  } catch (e) {}
 }
 
 /**
@@ -8907,7 +9077,11 @@ p.afterGet = function () {
  */
 
 p.update = function () {
-  batcher.push(this)
+  if (config.async) {
+    batcher.push(this)
+  } else {
+    this.run()
+  }
 }
 
 /**
@@ -8982,7 +9156,7 @@ p.teardown = function () {
 }
 
 module.exports = Watcher
-},{"./batcher":12,"./observer":48,"./parse/expression":51,"./util":62}],67:[function(require,module,exports){
+},{"./batcher":12,"./config":17,"./observer":48,"./parse/expression":51,"./util":62}],67:[function(require,module,exports){
 require("insert-css")("#app .v-enter{-webkit-animation:fadein .5s;-webkit-animation-delay:.2s;animation:fadein .5s;animation-delay:.2s;opacity:0}#app .v-leave{-webkit-animation:fadeout .2s;animation:fadeout .2s}@-moz-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-webkit-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-o-keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@keyframes fadein{0%{transform:scale(0.5);-webkit-transform:scale(0.5);opacity:0}50%{transform:scale(1.2);-webkit-transform:scale(1.2);opacity:.7}100%{transform:scale(1);-webkit-transform:scale(1);opacity:1}}@-moz-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@-webkit-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@-o-keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}@keyframes fadeout{0%{transform:scale(1);-webkit-transform:scale(1)}100%{transform:scale(0);-webkit-transform:scale(0)}}");
 var __vue_template__ = "<div v-component=\"{{view}}\" v-transition=\"\"></div>";
 module.exports = {
